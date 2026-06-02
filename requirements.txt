@@ -33,6 +33,16 @@ rich>=13.9.0          # Beautiful CLI output
 typer>=0.12.5         # CLI framework
 schedule>=1.2.2       # For daily scheduler loop
 
+# TTS Local (opsional tapi direkomendasikan untuk reliability - edge-tts sering bermasalah)
+# 
+# ⚠️  PENTING: TTS package (untuk xtts) HANYA support Python 3.7 sampai 3.10
+#    Kalau kamu pakai Python 3.11+ (termasuk 3.14) → "No matching distribution found for TTS"
+#    → Lihat QUICKSTART.md bagian "PENTING: Python Version"
+#
+# pip install piper-tts   # untuk TTS_PROVIDER=piper (ringan, cepat, offline). Butuh espeak-ng di Windows.
+# pip install TTS         # untuk TTS_PROVIDER=xtts (kualitas bagus, multilingual, ~2GB model)
+#   Windows CPU (pakai Python 3.10): py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
 # === Dashboard ===
 streamlit>=1.38.0
 

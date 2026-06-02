@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from config.settings import (
     LLM_PROVIDER, OLLAMA_HOST, OLLAMA_MODEL,
-    GROQ_API_KEY, GEMINI_API_KEY
+    GROQ_API_KEY, GROQ_MODEL,
+    GEMINI_API_KEY, GEMINI_MODEL
 )
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,25 @@ class LLMClient:
 
     def __init__(self, provider: Optional[str] = None, model: Optional[str] = None):
         self.provider = provider or LLM_PROVIDER
-        self.model = model or OLLAMA_MODEL
-        
+
+        # Choose smart default model based on provider
+        if model:
+            self.model = model
+        else:
+            if self.provider == "groq":
+                self.model = GROQ_MODEL
+            elif self.provider == "gemini":
+                self.model = GEMINI_MODEL
+            else:
+                self.model = OLLAMA_MODEL
+
         if self.provider == "ollama":
             self._init_ollama()
         elif self.provider == "groq":
+            # Safety check: user mungkin masih pakai nama model Ollama
+            if ":" in self.model or self.model.startswith(("qwen", "llama3", "gemma")) and not self.model.startswith("llama-"):
+                logger.warning(f"Model '{self.model}' sepertinya format Ollama. Beralih ke default Groq...")
+                self.model = GROQ_MODEL
             self._init_groq()
         elif self.provider == "gemini":
             self._init_gemini()
@@ -44,7 +59,6 @@ class LLMClient:
         try:
             from groq import Groq
             self.client = Groq(api_key=GROQ_API_KEY)
-            self.model = self.model or "llama-3.3-70b-versatile"
             logger.info(f"Groq client initialized → {self.model}")
         except ImportError:
             raise ImportError("Install groq: pip install groq")
@@ -53,8 +67,8 @@ class LLMClient:
         try:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
-            self.client = genai.GenerativeModel(self.model or "gemini-1.5-flash")
-            logger.info(f"Gemini client initialized")
+            self.client = genai.GenerativeModel(self.model)
+            logger.info(f"Gemini client initialized → {self.model}")
         except ImportError:
             raise ImportError("Install google-generativeai: pip install google-generativeai")
 

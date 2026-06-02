@@ -14,6 +14,10 @@ assets/stock/
 *.mp3
 *.srt
 
+# Voice / TTS models (large binaries - download via scripts, do not commit)
+assets/voices/**/*.onnx
+assets/voices/piper/MODEL_CARD
+
 # Python
 __pycache__/
 *.py[cod]

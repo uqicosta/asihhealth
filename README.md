@@ -46,7 +46,7 @@ Topik / Keyword
 | Komponen | Rekomendasi | Alasan |
 |----------|-------------|--------|
 | **LLM** | Ollama + `qwen2.5:7b` atau `llama3.1:8b` | Sangat bagus untuk bahasa Indonesia, gratis total |
-| **TTS** | `edge-tts` (voice: `id-ID-AndikaNeural` atau `id-ID-GadisNeural`) | Kualitas sangat natural, support bahasa Indonesia terbaik di kelas gratis |
+| **TTS** | `edge-tts` (default) atau `xtts` / `piper` (local, direkomendasikan) | edge-tts bagus tapi online (bisa unreliable). Gunakan local XTTS/Piper untuk scheduler & daily generation |
 | **Video Engine** | FFmpeg (via subprocess) | Paling cepat & efisien resource |
 | **Subtitle** | `faster-whisper` (model `base` atau `small`) | Akurat untuk bahasa Indonesia |
 | **Visual** | Pexels (gratis) + Ken Burns (FFmpeg zoompan) | Tanpa biaya AI image/video |
@@ -103,7 +103,85 @@ pip install -r requirements.txt
 
 ### 5. Install Requirements
 
-Lihat [requirements.txt](requirements.txt)
+**PENTING: Python Version Requirement**
+
+- **Supported:** Python 3.9 atau 3.10 (paling stabil untuk TTS lokal seperti XTTS)
+- **Tidak didukung:** Python 3.11, 3.12, 3.13, 3.14 (termasuk yang kamu pakai sekarang)
+
+Package `TTS` (untuk XTTS) di PyPI memiliki batasan `Requires-Python >=3.7.0,<3.11`.
+
+**Cara fix di Windows:**
+```powershell
+# Install Python 3.10 dari python.org jika belum ada
+py -3.10 -m venv .venv
+.venv\Scripts\Activate.ps1
+py -3.10 -m pip install -r requirements.txt
+```
+
+Atau pakai Conda:
+```powershell
+conda create -n asih python=3.10 -y
+conda activate asih
+pip install -r requirements.txt
+```
+
+Lihat [requirements.txt](requirements.txt) (setelah setup Python yang benar)
+
+### TTS yang Lebih Reliable (Penting!)
+
+Karena edge-tts kadang kurang reliable (tergantung layanan online), untuk penggunaan otomatis (scheduler) kami sarankan pindah ke local:
+
+**Opsi Terbaik: XTTS (local)**
+**Syarat wajib:** Python 3.9 atau 3.10 (baca bagian "Python Version Requirement" di atas).
+
+- Rekam 15-30 detik suara sample.
+- Simpan `assets/voices/reference/narator.wav`
+- Install (dengan Python 3.10):
+  ```powershell
+  py -3.10 -m pip install TTS
+  py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+  ```
+- Di `.env`:
+  ```env
+  TTS_PROVIDER=xtts
+  TTS_REFERENCE_AUDIO=assets/voices/reference/narator.wav
+  ```
+
+**Opsi Super Cepat & Ringan: Piper (local) — sangat direkomendasikan**
+- Jalankan helper script (paling mudah):
+  ```powershell
+  python scripts/download_piper_voice.py
+  ```
+- Script akan download voice Indonesia dan print perintah .env yang benar.
+
+Atau manual dari https://huggingface.co/rhasspy/piper-voices/tree/main/id
+
+Lihat QUICKSTART.md untuk detail.
+
+### 6. Menggunakan Groq (bukan Ollama)
+
+Jika Anda ingin pakai Groq (bukan Ollama lokal):
+
+1. Dapatkan API key gratis di https://console.groq.com/keys
+2. Tambahkan ke file `.env`:
+
+```env
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GROQ_MODEL=llama-3.3-70b-versatile
+```
+
+Model bagus di Groq:
+- `llama-3.3-70b-versatile` → Kualitas terbaik (rekomendasi)
+- `llama-3.1-8b-instant` → Sangat cepat & murah
+
+Kemudian jalankan:
+
+```powershell
+python pipeline/run.py --topic "Bahaya minum kopi setiap hari" --use-stock
+```
+
+**Penting**: Jangan pakai model Ollama (`qwen2.5:7b`) ketika `LLM_PROVIDER=groq`. Model name harus sesuai dengan Groq.
 
 ### 6. (Sangat Direkomendasikan) Setup Pexels API Key
 
@@ -124,8 +202,10 @@ Tanpa ini, pipeline akan fallback ke video background polos (masih bagus, tapi k
 
 ### Mode 1: Full Otomatis dengan Visual Cantik (Direkomendasikan)
 
+Pastikan venv aktif dan Anda berada di root folder project.
+
 ```powershell
-# Video dengan stock image gratis + efek Ken Burns (paling recommended)
+.venv\Scripts\Activate.ps1
 python pipeline/run.py --topic "Bahaya minum kopi setiap hari bagi kesehatan hati" --use-stock
 ```
 

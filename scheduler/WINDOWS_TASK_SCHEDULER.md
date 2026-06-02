@@ -55,6 +55,7 @@ Cek apakah video muncul di `output/videos/`
 ### Tips
 
 - Untuk melihat log, jalankan manual dulu dengan `python scheduler\daily.py`
+- **Sangat penting untuk reliability**: Jangan pakai edge-tts untuk daily automation. Set `TTS_PROVIDER=xtts` atau `piper` + reference di `.env` (lihat QUICKSTART.md)
 - Topik diambil dari `scheduler/topics.json` (prioritas tinggi duluan)
 - Topik yang sudah diproses disimpan di `output/scheduler_processed.json`
 - Kalau ingin reset: hapus file `scheduler_processed.json`

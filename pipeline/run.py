@@ -4,9 +4,20 @@ One-command YouTube content automation (Bahasa Indonesia)
 
 Usage examples:
     python pipeline/run.py --topic "Bahaya terlalu banyak minum kopi"
-    python pipeline/run.py --topic "..." --model qwen2.5:14b --voice id-ID-GadisNeural
+    python pipeline/run.py --topic "..." --model llama-3.3-70b-versatile --voice id-ID-GadisNeural
     python pipeline/run.py --topic "..." --only-script-voice
 """
+
+# --- Path fix for direct script execution ---
+# Allows running `python pipeline/run.py` from project root
+# so that "from config..." and "from core..." resolve correctly.
+import sys
+from pathlib import Path as _PathForSetup
+
+_project_root = _PathForSetup(__file__).parent.parent.resolve()
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+# --- end path fix ---
 
 import argparse
 import json
@@ -20,7 +31,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from config.settings import (
     OUTPUT_SCRIPTS, OUTPUT_AUDIO, OUTPUT_VIDEOS,
-    TTS_VOICE, USE_STOCK_VISUALS, NUM_STOCK_IMAGES, PEXELS_API_KEY
+    TTS_VOICE, TTS_PROVIDER, TTS_REFERENCE_AUDIO,
+    USE_STOCK_VISUALS, NUM_STOCK_IMAGES, PEXELS_API_KEY
 )
 from core.llm import LLMClient, generate_health_script
 from core.tts import generate_voiceover, estimate_duration
@@ -29,7 +41,6 @@ from core.subtitles import create_subtitles_and_burn
 from core.assets import download_stock_for_topic
 from core.thumbnail import generate_thumbnails_for_script
 from core.youtube import upload_complete_from_pipeline
-from pathlib import Path as _Path  # for type hint
 
 console = Console()
 logging.basicConfig(
@@ -60,7 +71,7 @@ def run_full_pipeline(
     generate_thumbnail: bool = True,
     auto_upload: bool = False,
     youtube_privacy: str = "private",
-    voice_clone_reference: Optional[_Path] = None,
+    voice_clone_reference: Optional[Path] = None,
 ):
     """
     Full automation pipeline for Indonesian health YouTube content.
@@ -75,6 +86,7 @@ def run_full_pipeline(
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
         task = progress.add_task("Generating script with LLM...", total=None)
         client = LLMClient(model=model)
+        console.print(f"[dim]LLM Provider: {client.provider} | Model: {client.model}[/dim]")
         script_data = generate_health_script(topic, client=client)
         script_path = save_script_json(script_data, topic)
         progress.update(task, description="Script generated ✓")
@@ -92,10 +104,23 @@ def run_full_pipeline(
     # === STEP 2: Generate Voiceover ===
     script_text = script_data["script"]
     clone_ref = voice_clone_reference
+
+    # Auto use reference from env if using local TTS provider and no CLI override
+    if not clone_ref and TTS_PROVIDER.lower() in ("xtts", "piper") and TTS_REFERENCE_AUDIO:
+        clone_ref = Path(TTS_REFERENCE_AUDIO)
+
+    task_desc = f"Generating voiceover ({TTS_PROVIDER})..."
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-        task_desc = "Generating voiceover (cloned voice)..." if clone_ref else "Generating Indonesian voiceover (edge-tts)..."
         task = progress.add_task(task_desc, total=None)
-        audio_path = generate_voiceover(script_text, voice=voice, clone_reference=clone_ref)
+        try:
+            audio_path = generate_voiceover(script_text, voice=voice, clone_reference=clone_ref)
+        except Exception as tts_err:
+            progress.update(task, description="Voiceover gagal ✗")
+            console.print(f"\n[bold red]Error saat generate voiceover:[/bold red]")
+            console.print(str(tts_err))
+            console.print("\n[yellow]Tips: Untuk reliability lebih baik, set TTS_PROVIDER=xtts atau piper + reference audio di .env.[/yellow]")
+            console.print("[yellow]PENTING: TTS/XTTS butuh Python 3.9 atau 3.10. Kamu pakai 3.14 → lihat QUICKSTART.md 'Python Version'.[/yellow]")
+            raise
         progress.update(task, description="Voiceover generated ✓")
 
     console.print(f"[green]✓[/green] Audio: {audio_path.name}  |  Est. duration: {estimate_duration(script_text)} menit")
@@ -211,9 +236,22 @@ def run_full_pipeline(
 def _generate_voice_only(script_data: dict, voice: str):
     """Helper for --only-script-voice mode."""
     script_text = script_data["script"]
-    audio_path = generate_voiceover(script_text, voice=voice)
-    console.print(f"\n[green]✓ Voiceover created:[/green] {audio_path}")
-    console.print(f"  Duration estimate: {estimate_duration(script_text)} minutes")
+
+    # auto ref for local providers
+    clone_ref = None
+    if TTS_PROVIDER.lower() in ("xtts", "piper") and TTS_REFERENCE_AUDIO:
+        clone_ref = Path(TTS_REFERENCE_AUDIO)
+
+    try:
+        audio_path = generate_voiceover(script_text, voice=voice, clone_reference=clone_ref)
+        console.print(f"\n[green]✓ Voiceover created:[/green] {audio_path}")
+        console.print(f"  Duration estimate: {estimate_duration(script_text)} minutes")
+    except Exception as tts_err:
+        console.print(f"\n[bold red]Error saat generate voiceover (only-script-voice mode):[/bold red]")
+        console.print(str(tts_err))
+        console.print("\n[yellow]Tips: Untuk lebih reliable gunakan local TTS (xtts/piper) via .env.[/yellow]")
+        console.print("[yellow]PENTING: TTS/XTTS butuh Python 3.9 atau 3.10. Kamu pakai 3.14 → lihat QUICKSTART.md 'Python Version'.[/yellow]")
+        raise
 
 
 def main():
@@ -221,8 +259,11 @@ def main():
         description="AsihHealth - Otomasi Konten YouTube Berbahasa Indonesia (Cost Efficient)"
     )
     parser.add_argument("--topic", "-t", required=True, help="Topik video kesehatan (dalam bahasa Indonesia)")
-    parser.add_argument("--model", "-m", default="qwen2.5:7b", help="Ollama model (default: qwen2.5:7b)")
-    parser.add_argument("--voice", "-v", default=TTS_VOICE, help="edge-tts voice (default: id-ID-AndikaNeural)")
+    parser.add_argument("--model", "-m", default=None, 
+                        help="LLM model name. Default depends on LLM_PROVIDER in .env "
+                             "(qwen2.5:7b for Ollama, llama-3.3-70b-versatile for Groq, etc.)")
+    parser.add_argument("--voice", "-v", default=TTS_VOICE, 
+                        help="Voice (untuk edge-tts). Untuk provider lokal, gunakan TTS_REFERENCE_AUDIO di .env")
     parser.add_argument("--no-video", action="store_true", help="Hanya generate script + voiceover")
     parser.add_argument("--no-subtitles", action="store_true", help="Skip auto subtitle generation")
     parser.add_argument("--only-script-voice", action="store_true", help="Stop setelah script + voice (untuk editing manual)")

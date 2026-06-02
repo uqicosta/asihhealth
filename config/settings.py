@@ -36,12 +36,33 @@ LLM_PROVIDER: Literal["ollama", "groq", "gemini", "openrouter"] = os.getenv("LLM
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
+# Groq models (very fast & cheap). Good options:
+# - "llama-3.3-70b-versatile"   (best quality)
+# - "llama-3.1-8b-instant"      (very fast & cheap)
+# - "gemma2-9b-it"
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # === TTS Settings ===
+# Providers:
+# - "edge-tts" : free online, good quality ID voices, but can be unreliable (network/service)
+# - "xtts"     : local (Coqui XTTS), more reliable for automation, needs reference audio for best results
+# - "piper"    : fast local offline (Piper), very reliable, needs voice model download
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge-tts")
+
+# For edge-tts
 TTS_VOICE = os.getenv("TTS_VOICE", "id-ID-AndikaNeural")  # Excellent Indonesian male voice
+
+# For xtts / piper local (recommended for reliability in scheduler/daily use)
+# Provide a short clear Indonesian audio sample (10-30s) for cloning or reference
+TTS_REFERENCE_AUDIO = os.getenv("TTS_REFERENCE_AUDIO", "")  # e.g. assets/voices/reference/narator.wav
+
+# Piper model path (if using TTS_PROVIDER=piper)
+PIPER_MODEL = os.getenv("PIPER_MODEL", "")  # e.g. assets/voices/piper/id_ID-fahmi-medium.onnx
+PIPER_CONFIG = os.getenv("PIPER_CONFIG", "")  # usually model.json next to onnx
 
 # === Whisper Settings ===
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")

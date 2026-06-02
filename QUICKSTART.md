@@ -6,6 +6,30 @@ Panduan cepat untuk memulai otomasi konten YouTube berbahasa Indonesia.
 
 ## 1. Persiapan Awal (5-10 menit)
 
+**PENTING: Python Version**
+
+Proyek ini support **Python 3.9 atau 3.10** untuk fitur TTS lokal terbaik (XTTS).
+
+- Python 3.11+ (termasuk 3.14 yang kamu pakai) **tidak didukung** oleh package `TTS` (Coqui XTTS).
+- Kamu akan dapat error: `No matching distribution found for TTS`
+
+**Solusi cepat di Windows:**
+- Install Python 3.10 dari https://www.python.org/downloads/release/python-31011/ (atau versi 3.10 terbaru)
+- Gunakan `py` launcher:
+  ```powershell
+  py -3.10 -m venv .venv
+  .venv\Scripts\Activate.ps1
+  py -3.10 -m pip install -r requirements.txt
+  py -3.10 pipeline/run.py --topic "..."
+  ```
+
+Atau pakai Conda (paling mudah untuk multiple Python):
+```powershell
+conda create -n asih python=3.10
+conda activate asih
+pip install -r requirements.txt
+```
+
 ### Install FFmpeg (WAJIB)
 ```powershell
 winget install ffmpeg
@@ -13,16 +37,34 @@ winget install ffmpeg
 ffmpeg -version
 ```
 
-### Install Ollama (Sangat Direkomendasikan - Gratis Total)
+### Install Ollama (Opsional - Gratis Total)
+Jika ingin 100% offline & gratis:
+
 1. Download: https://ollama.com/download
-2. Install & jalankan
-3. Pull model terbaik untuk Bahasa Indonesia:
+2. Pull model:
 
 ```powershell
 ollama pull qwen2.5:7b
-# atau kalau RAM banyak:
-ollama pull qwen2.5:14b
 ```
+
+### Menggunakan Groq (API - Cepat & Murah)
+
+Jika tidak pakai Ollama, gunakan Groq:
+
+1. Buat API key di https://console.groq.com/keys
+2. Edit file `.env`:
+
+```env
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_xxxxxxxxxxxx
+GROQ_MODEL=llama-3.3-70b-versatile
+```
+
+Model Groq yang bagus:
+- `llama-3.3-70b-versatile` (kualitas tinggi - recommended)
+- `llama-3.1-8b-instant` (paling cepat & murah)
+
+**Penting**: Jangan gunakan model Ollama (`qwen2.5:7b`) saat pakai Groq. Nama model harus sesuai Groq.
 
 ### (Opsional tapi sangat direkomendasikan) Dapatkan Pexels API Key (Gratis)
 1. Daftar di https://www.pexels.com/api/
@@ -30,6 +72,53 @@ ollama pull qwen2.5:14b
 3. Tambahkan ke file `.env` → `PEXELS_API_KEY=xxxxxxxx`
 
 Ini memungkinkan video dengan gambar stock berkualitas tinggi + efek Ken Burns.
+
+### Rekomendasi TTS yang Lebih Reliable (edge-tts sering bermasalah)
+edge-tts bagus tapi **kurang reliable** karena tergantung layanan online Microsoft.
+
+Untuk penggunaan scheduler / daily / production, **sangat disarankan** pindah ke local TTS:
+
+**XTTS (paling direkomendasikan untuk kualitas & reliability di Windows):**
+
+**Syarat wajib:** Python 3.9 atau 3.10 (lihat bagian paling atas tentang Python version requirement).
+
+1. Rekam sample suara Anda 15-30 detik (jelas, dalam Bahasa Indonesia, tanpa noise).
+2. Simpan di `assets/voices/reference/narator.wav`
+3. Install (pastikan pakai Python 3.10):
+
+```powershell
+py -3.10 -m pip install TTS
+# Jika torch error di Windows (CPU):
+py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+4. Di `.env`:
+
+```env
+TTS_PROVIDER=xtts
+TTS_REFERENCE_AUDIO=assets/voices/reference/narator.wav
+```
+
+Model ~2GB akan download otomatis pertama kali.
+
+Jika masih error, pesan error sekarang sudah sangat detail.
+
+Atau untuk yang paling ringan & cepat (sangat direkomendasikan untuk scheduler):
+
+```powershell
+python scripts/download_piper_voice.py
+```
+
+Script ini akan otomatis mengunduh voice Indonesia bagus (`id_ID-news_tts-medium`) ke folder yang benar.
+
+Setelah itu di `.env` (script akan print instruksi):
+
+```env
+TTS_PROVIDER=piper
+PIPER_MODEL=assets/voices/piper/id_ID-news_tts-medium.onnx
+```
+
+Lalu jalankan pipeline seperti biasa — sekarang akan pakai local TTS secara otomatis (lebih reliable daripada edge-tts).
 
 ### Setup Python Environment
 ```powershell
@@ -45,11 +134,21 @@ pip install -r requirements.txt
 
 ## 2. Generate Video Pertama (One Command)
 
+**Penting:** Pastikan virtual environment aktif:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Lalu jalankan dari root folder project.
+
 ### Opsi A: Video Cantik dengan Stock Image (Direkomendasikan)
 
 ```powershell
 python pipeline/run.py --topic "Bahaya minum kopi setiap hari bagi kesehatan" --use-stock
 ```
+
+> Catatan: Script sudah include path fix sehingga `python pipeline/run.py` berjalan langsung dari root folder. Alternatif: `python -m pipeline.run --topic "..."`
 
 ### Opsi B: Cepat (hanya background gelap + teks)
 
@@ -146,6 +245,8 @@ streamlit run dashboard/app.py
 
 Dashboard memungkinkan kamu mengelola topik, generate, dan upload dari browser.
 
+Jalankan dari root folder dengan venv aktif. Path fix sudah disertakan.
+
 ## 7. Scheduler Harian (Generate Otomatis Setiap Hari)
 
 ```powershell
@@ -155,6 +256,8 @@ python scheduler/daily.py --use-stock
 # Atau jalankan dalam loop
 python scheduler/daily.py --loop
 ```
+
+Pastikan venv aktif dan jalankan dari root folder.
 
 Lihat panduan Windows Task Scheduler di `scheduler/WINDOWS_TASK_SCHEDULER.md`
 
@@ -176,6 +279,64 @@ Lihat panduan Windows Task Scheduler di `scheduler/WINDOWS_TASK_SCHEDULER.md`
 **FFmpeg error** → Pastikan FFmpeg ada di PATH
 
 **Subtitle jelek** → Coba ganti `WHISPER_MODEL=small` di `.env`
+
+**Python version error saat install TTS / XTTS**
+```
+ERROR: Could not find a version that satisfies the requirement TTS
+Requires-Python >=3.7.0,<3.11
+```
+
+**Penyebab:** Kamu pakai Python 3.11+ (termasuk 3.14). Package `TTS` (Coqui XTTS) belum support Python baru.
+
+**Solusi:** Ikuti instruksi di bagian atas "PENTING: Python Version". Gunakan Python 3.10 + `py -3.10`.
+
+**"No audio was received" / edge_tts.exceptions.NoAudioReceived**  
+Ini error umum dari Microsoft Edge TTS service. Penyebab & solusi:
+
+Karena edge-tts kurang reliable, **solusi terbaik** adalah pindah ke local TTS:
+
+```powershell
+python scripts/download_piper_voice.py
+```
+
+Lalu set di .env:
+```env
+TTS_PROVIDER=piper
+PIPER_MODEL=assets/voices/piper/id_ID-news_tts-medium.onnx
+```
+
+Atau gunakan XTTS dengan reference audio (harus pakai Python <= 3.10).
+
+Jika tetap pakai edge-tts:
+1. Voice tidak valid.
+   - Jalankan: `python scripts/list_voices.py`
+   - Di `.env`, ganti `TTS_VOICE=id-ID-GadisNeural`
+
+2. Koneksi internet bermasalah.
+
+3. Teks terlalu panjang.
+
+4. Service Microsoft bermasalah → coba lagi nanti.
+
+**Piper menghasilkan file audio 0 KB**
+
+Penyebab paling umum di Windows: **espeak-ng belum terinstall**.
+
+Piper membutuhkan espeak-ng untuk mengubah teks Indonesia menjadi fonem.
+
+**Solusi cepat:**
+1. Download installer espeak-ng dari: https://github.com/espeak-ng/espeak-ng/releases/latest
+2. Install (pilih "Add to PATH" jika ada opsi).
+3. Restart PowerShell / terminal Anda.
+4. Coba generate lagi.
+
+Jika masih bermasalah, lebih mudah pindah ke:
+```env
+TTS_PROVIDER=xtts
+TTS_REFERENCE_AUDIO=assets/voices/reference/narator.wav
+```
+
+Kode pipeline sekarang akan mendeteksi file 0KB dan memberikan pesan error yang jelas.
 
 ---
 

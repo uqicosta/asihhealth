@@ -13,6 +13,15 @@ Untuk menjalankan otomatis setiap hari di Windows:
 Cost efficient: hanya generate 1 video/hari.
 """
 
+# --- Path fix for direct script execution ---
+import sys
+from pathlib import Path as _PathForSetup
+
+_project_root = _PathForSetup(__file__).parent.parent.resolve()
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+# --- end path fix ---
+
 import json
 import logging
 import argparse

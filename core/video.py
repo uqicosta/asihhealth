@@ -212,28 +212,22 @@ def create_video_with_images(
         raise RuntimeError("Failed to create any image clips")
 
     # Step 2: Build xfade filter chain for smooth transitions
-    # This is the complex but beautiful part
+    # Chain xfade filters: [0:v][1:v]xfade...[v1]; [v1][2:v]xfade... etc.
+    # Important: first input must be referenced as [0:v], not a label like [v0]
     filter_parts = []
-    concat_inputs = ""
-
-    for i in range(len(clips)):
-        concat_inputs += f"[{i}:v]"
-
-    # Create xfade chain
-    xfade_expr = ""
-    current_label = "v0"
+    current_stream = "0:v"
 
     for i in range(1, len(clips)):
         offset = (image_duration - transition_duration) * i
         next_label = f"v{i}"
-        xfade_expr += (
-            f"[{current_label}][{i}:v]"
-            f"xfade=transition=fade:duration={transition_duration}:offset={offset:.3f}[{next_label}];"
+        filter_parts.append(
+            f"[{current_stream}][{i}:v]"
+            f"xfade=transition=fade:duration={transition_duration}:offset={offset:.3f}[{next_label}]"
         )
-        current_label = next_label
+        current_stream = next_label
 
-    # Final filter
-    filter_complex = xfade_expr + f"[{current_label}]format=yuv420p[video]"
+    # Final filter: take last xfade output, ensure pixel format, and label as [video] for -map
+    filter_complex = ";".join(filter_parts) + f";[{current_stream}]format=yuv420p[video]"
 
     # Build the full command
     cmd_inputs = []
@@ -255,11 +249,13 @@ def create_video_with_images(
 
     visual_only = output_path.with_suffix(".visual.mp4")
     if not _run_ffmpeg(cmd_xfade, "Merging clips with xfade transitions"):
-        # Cleanup and fallback
-        for c in clips:
-            c.unlink(missing_ok=True)
-        temp_dir.rmdir()
-        raise RuntimeError("Ken Burns xfade failed")
+        # Cleanup temp clips (use rmtree in case some files were left behind)
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            pass
+        logger.warning("Ken Burns xfade merge failed (filter error or incompatible FFmpeg). Falling back to simple video.")
+        return create_simple_video(audio_path, "AsihHealth", output_path)
 
     # Step 3: Mux the beautiful visual with audio narration
     cmd_mux = [
@@ -282,8 +278,12 @@ def create_video_with_images(
         c.unlink(missing_ok=True)
     try:
         temp_dir.rmdir()
-    except:
-        pass
+    except Exception:
+        # Fallback to rmtree if rmdir fails (e.g. stray files)
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            pass
 
     if not success:
         raise RuntimeError("Failed to mux final video")

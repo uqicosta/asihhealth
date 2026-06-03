@@ -11,8 +11,8 @@ Dibuat khusus untuk channel kesehatan (AsihHealth) tapi bisa digunakan untuk top
 | Fitur | Teknologi | Biaya |
 |-------|-----------|-------|
 | Penulisan Script | Ollama (Qwen2.5 / Llama3.1) | **Gratis** |
-| Voice Narasi (ID) | edge-tts (Microsoft) | **Gratis** |
-| **Stock Visuals** | Pexels API (gratis) + Ken Burns | **Gratis** |
+| Voice Narasi (ID) | edge-tts (default) / openai / piper / xtts | **Gratis** atau sangat murah (openai ~Rp250/video) |
+| **Stock Visuals** | Pexels (default) atau OpenAI DALL·E (ASSET_IMAGE_PROVIDER=openai) + Ken Burns | Gratis atau murah |
 | Video Editing | FFmpeg (zoompan + xfade) | **Gratis** |
 | Auto Subtitle | faster-whisper | **Gratis** |
 | Upload YouTube | YouTube Data API | Gratis (quota) |
@@ -28,7 +28,7 @@ Topik / Keyword
       ↓
 [LLM Lokal - Ollama] → Script + Judul + Deskripsi + Tags
       ↓
-[edge-tts] → Voiceover (Bahasa Indonesia natural)
+[edge-tts / openai / piper / xtts] → Voiceover (Bahasa Indonesia natural)
       ↓
 [FFmpeg] → Video Assembly (stock footage / background + audio)
       ↓
@@ -46,14 +46,14 @@ Topik / Keyword
 | Komponen | Rekomendasi | Alasan |
 |----------|-------------|--------|
 | **LLM** | Ollama + `qwen2.5:7b` atau `llama3.1:8b` | Sangat bagus untuk bahasa Indonesia, gratis total |
-| **TTS** | `edge-tts` (default) atau `xtts` / `piper` (local, direkomendasikan) | edge-tts bagus tapi online (bisa unreliable). Gunakan local XTTS/Piper untuk scheduler & daily generation |
+| **TTS** | `edge-tts` (default) / `openai` (API reliable) / `piper` / `xtts` (local) | edge-tts kadang unreliable. `openai` = mudah & stabil (biaya kecil). Local piper/xtts = gratis total setelah setup. |
 | **Video Engine** | FFmpeg (via subprocess) | Paling cepat & efisien resource |
-| **Subtitle** | `faster-whisper` (model `base` atau `small`) | Akurat untuk bahasa Indonesia |
-| **Visual** | Pexels (gratis) + Ken Burns (FFmpeg zoompan) | Tanpa biaya AI image/video |
+| **Subtitle** | `faster-whisper` guided by the LLM-generated script | Akurat + faithful to the original script (bukan pure transcription) |
+| **Visual** | Pexels (gratis) atau OpenAI DALL·E (kustom) + Ken Burns | Tanpa biaya atau murah |
 
 Alternatif lebih murah (kalau tidak mau install Ollama):
 - LLM: Groq (Llama3-70B) atau Gemini Flash (sangat murah)
-- TTS: Tetap pakai edge-tts
+- TTS: `openai` (cloud API, setup 1 menit) atau tetap pakai edge-tts
 
 ---
 
@@ -129,9 +129,26 @@ Lihat [requirements.txt](requirements.txt) (setelah setup Python yang benar)
 
 ### TTS yang Lebih Reliable (Penting!)
 
-Karena edge-tts kadang kurang reliable (tergantung layanan online), untuk penggunaan otomatis (scheduler) kami sarankan pindah ke local:
+Karena edge-tts kadang kurang reliable (tergantung layanan online), untuk penggunaan otomatis (scheduler) kami sarankan salah satu dari:
 
-**Opsi Terbaik: XTTS (local)**
+**Opsi Paling Mudah & Cepat: OpenAI TTS (Cloud API) — Direkomendasikan untuk kebanyakan user**
+- Tidak perlu install model berat, tidak perlu Python 3.10 khusus, tidak perlu espeak-ng.
+- Kualitas sangat bagus (terutama `tts-1-hd`).
+- Biaya sangat kecil (~Rp 200-500 per video pendek).
+- Setup 2 menit:
+
+1. Dapatkan API key di https://platform.openai.com/api-keys (ada free credit awal)
+2. Tambahkan ke `.env`:
+   ```env
+   TTS_PROVIDER=openai
+   OPENAI_API_KEY=sk-proj-...
+   # Opsional (default bagus):
+   OPENAI_TTS_VOICE=onyx
+   OPENAI_TTS_MODEL=tts-1
+   ```
+Lihat detail + contoh lengkap di `.env.example` dan QUICKSTART.md.
+
+**Opsi Terbaik (Gratis Total): XTTS (local)**
 **Syarat wajib:** Python 3.9 atau 3.10 (baca bagian "Python Version Requirement" di atas).
 
 - Rekam 15-30 detik suara sample.
@@ -147,7 +164,7 @@ Karena edge-tts kadang kurang reliable (tergantung layanan online), untuk penggu
   TTS_REFERENCE_AUDIO=assets/voices/reference/narator.wav
   ```
 
-**Opsi Super Cepat & Ringan: Piper (local) — sangat direkomendasikan**
+**Opsi Super Cepat & Ringan (Gratis Total): Piper (local) — sangat direkomendasikan**
 - Jalankan helper script (paling mudah):
   ```powershell
   python scripts/download_piper_voice.py
@@ -156,7 +173,7 @@ Karena edge-tts kadang kurang reliable (tergantung layanan online), untuk penggu
 
 Atau manual dari https://huggingface.co/rhasspy/piper-voices/tree/main/id
 
-Lihat QUICKSTART.md untuk detail.
+Lihat QUICKSTART.md untuk detail lengkap semua opsi.
 
 ### 6. Menggunakan Groq (bukan Ollama)
 
@@ -253,8 +270,8 @@ asihhealth/
 │   └── settings.py
 ├── core/
 │   ├── llm.py              # Ollama / Groq / Gemini client
-│   ├── tts.py              # edge-tts wrapper (Bahasa Indonesia)
-│   ├── subtitles.py        # Whisper + FFmpeg burn
+│   ├── tts.py              # TTS dispatcher (edge-tts + openai + piper + xtts)
+│   ├── subtitles.py        # faster-whisper (guided by LLM script) + FFmpeg burn
 │   ├── video.py            # FFmpeg video assembly engine
 │   └── youtube.py          # Upload automation
 ├── pipeline/
@@ -292,7 +309,7 @@ Dari `edge-tts --list-voices`:
 | Item | Biaya per Video (10-12 menit) |
 |------|-------------------------------|
 | LLM (Ollama lokal) | Rp0 |
-| TTS (edge-tts) | Rp0 |
+| TTS (edge-tts / openai / piper / xtts) | Rp0 atau ~Rp250/video (openai) |
 | Whisper lokal | Rp0 |
 | FFmpeg | Rp0 |
 | Stock footage | Rp0 |
@@ -306,10 +323,10 @@ Kalau pakai API (Groq/Gemini):
 ## 📌 Roadmap
 
 - [x] Script generator + prompt kesehatan ID
-- [x] TTS integration (edge-tts)
+- [x] TTS integration (edge-tts + openai API + piper + xtts local)
 - [x] FFmpeg video assembly (Ken Burns + Pexels stock)
 - [x] Auto subtitle + burn-in
-- [x] Thumbnail generator otomatis (Pillow)
+- [x] Thumbnail generator otomatis (Pillow + optional OpenAI DALL·E)
 - [x] Scheduler harian (1 video/hari)
 - [x] YouTube upload automation (dengan thumbnail)
 - [ ] Dashboard sederhana (Streamlit/Gradio)
@@ -351,7 +368,7 @@ python pipeline/run.py --topic "..." --voice-clone assets/voices/reference/narat
 pip install TTS torch torchaudio
 ```
 
-Kalau tidak diinstall, otomatis fallback ke edge-tts.
+Kalau tidak diinstall, otomatis fallback ke edge-tts (atau ganti ke openai via .env).
 
 ## 📤 Upload Otomatis ke YouTube
 

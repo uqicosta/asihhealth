@@ -5,21 +5,25 @@ Pilihan provider (set di .env TTS_PROVIDER):
 - edge-tts : gratis, kualitas bagus untuk ID, tapi kadang unreliable (online) - default
 - xtts     : local XTTS (Coqui), lebih reliable, butuh reference audio + pip install TTS (+ torch)
 - piper    : local Piper, paling ringan & cepat (offline), butuh espeak-ng di Windows
+- openai   : reliable paid cloud API via OpenAI TTS (mudah setup, kualitas bagus, tanpa install berat). Auto-splits long scripts (>4096 chars).
 
-Untuk daily/scheduler generation, sangat direkomendasikan pakai local (xtts atau piper).
+Untuk daily/scheduler generation, sangat direkomendasikan pakai local (xtts atau piper) atau openai (API reliable).
 Lihat QUICKSTART.md untuk instalasi detail.
 """
 
 import asyncio
 import logging
+import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional, List
 
 from config.settings import (
     TTS_PROVIDER, TTS_VOICE, TTS_REFERENCE_AUDIO,
     OUTPUT_AUDIO,
-    PIPER_MODEL, PIPER_CONFIG
+    PIPER_MODEL, PIPER_CONFIG,
+    OPENAI_API_KEY, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE
 )
 from core.voice_cloning import generate_cloned_voiceover
 
@@ -265,6 +269,276 @@ def generate_piper_voiceover(
         ) from e
 
 
+def _split_text_into_chunks(text: str, max_chars: int = 4000) -> list[str]:
+    """
+    Split long narration text into chunks safe for OpenAI TTS (max 4096 chars per request).
+    Prefers natural sentence/paragraph boundaries to avoid cutting words mid-sentence.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    # Split while trying to keep sentence punctuation attached
+    # Matches common Indonesian/English sentence endings + whitespace or blank lines
+    parts = re.split(r'([.!?。！？]\s+|\n\s*\n+)', text)
+
+    sentences: list[str] = []
+    i = 0
+    while i < len(parts):
+        chunk = parts[i]
+        if i + 1 < len(parts) and re.match(r'[.!?。！？]\s+|\n\s*\n+', parts[i + 1]):
+            chunk += parts[i + 1]
+            i += 2
+        else:
+            i += 1
+        s = chunk.strip()
+        if s:
+            sentences.append(s)
+
+    if not sentences:
+        sentences = [text]
+
+    chunks: list[str] = []
+    current = ""
+
+    for sent in sentences:
+        if len(current) + len(" " + sent) <= max_chars:
+            current = (current + " " + sent).strip() if current else sent
+        else:
+            if current:
+                chunks.append(current)
+            current = sent
+
+            # Hard split any single sentence/paragraph that is still too long
+            while len(current) > max_chars:
+                # Prefer breaking at a space near the limit
+                break_point = current.rfind(" ", 0, max_chars - 50)
+                if break_point < 100:  # avoid creating tiny leading fragments
+                    break_point = max_chars
+                piece = current[:break_point].strip()
+                if piece:
+                    chunks.append(piece)
+                current = current[break_point:].strip()
+
+    if current:
+        chunks.append(current)
+
+    # Ultimate safety: hard chunk anything still over limit
+    final_chunks: list[str] = []
+    for c in chunks:
+        if len(c) <= max_chars:
+            final_chunks.append(c)
+        else:
+            for j in range(0, len(c), max_chars):
+                final_chunks.append(c[j : j + max_chars])
+
+    return [c for c in final_chunks if c.strip()]
+
+
+def _concat_mp3_chunks_ffmpeg(chunk_paths: list[Path], output_path: Path) -> None:
+    """
+    Concatenate multiple MP3 files into one using FFmpeg's concat demuxer.
+
+    Uses stream copy (-c copy) for speed and zero quality loss.
+    Uses only FFmpeg (already required by the project) so it works on Python 3.13+ without audioop/pyaudioop.
+    """
+    if not chunk_paths:
+        raise ValueError("Tidak ada chunk audio untuk digabungkan")
+
+    if len(chunk_paths) == 1:
+        # Simple copy for the single-chunk case (shouldn't normally reach here)
+        import shutil
+        shutil.copy2(chunk_paths[0], output_path)
+        return
+
+    # Write concat list file (FFmpeg concat demuxer format)
+    concat_list = output_path.with_name(f"{output_path.stem}.concat.txt")
+    try:
+        with open(concat_list, "w", encoding="utf-8") as f:
+            for p in chunk_paths:
+                # Use absolute path and properly escape for the concat protocol
+                safe_path = str(p.resolve()).replace("'", "'\\''")
+                f.write(f"file '{safe_path}'\n")
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_list),
+            "-c", "copy",           # Important: no re-encoding
+            str(output_path)
+        ]
+
+        logger.info(f"FFmpeg: Menggabungkan {len(chunk_paths)} potongan audio (concat demuxer)...")
+        logger.debug(" ".join(cmd))
+
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode != 0:
+            logger.error("FFmpeg concat gagal.")
+            if result.stderr:
+                logger.error(result.stderr[-2000:])
+            raise RuntimeError(
+                "Gagal menggabungkan potongan audio dengan FFmpeg.\n"
+                "Pastikan FFmpeg terinstall dan ada di PATH."
+            )
+    finally:
+        # Always clean up the temporary list file
+        concat_list.unlink(missing_ok=True)
+
+
+def generate_openai_voiceover(
+    script_text: str,
+    output_name: Optional[str] = None,
+) -> Path:
+    """
+    Generate voiceover using OpenAI TTS API (reliable, high quality, zero local heavy deps).
+
+    Requires OPENAI_API_KEY in .env.
+    Supports Indonesian text natively.
+    Uses mp3 output (compatible with rest of pipeline via ffmpeg).
+
+    Long scripts (> ~4000 chars) are automatically split into multiple API calls
+    (on sentence boundaries when possible) and the audio chunks are concatenated.
+    """
+    if not OPENAI_API_KEY:
+        raise ValueError(
+            "OPENAI_API_KEY belum diset di .env.\n\n"
+            "Cara setup OpenAI TTS (reliable API option):\n"
+            "1. Buka https://platform.openai.com/api-keys\n"
+            "2. Buat API key baru (copy secret)\n"
+            "3. Tambahkan di .env:\n"
+            "   OPENAI_API_KEY=sk-...\n"
+            "   TTS_PROVIDER=openai\n"
+            "   # Opsional:\n"
+            "   OPENAI_TTS_VOICE=onyx   # onyx | nova | alloy | echo | shimmer | fable\n"
+            "   OPENAI_TTS_MODEL=tts-1  # tts-1 (murah) atau tts-1-hd (kualitas lebih tinggi)\n\n"
+            "Biaya sangat rendah: ~$0.015 per 1.000 kata (tts-1) / ~$0.030 (tts-1-hd)."
+        )
+
+    if not output_name:
+        import hashlib
+        h = hashlib.md5(script_text[:100].encode()).hexdigest()[:8]
+        output_name = f"voice_{h}.mp3"
+
+    output_path = OUTPUT_AUDIO / output_name
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Clean text similar to edge-tts
+    cleaned_text = (
+        script_text.strip()
+        .replace("—", "-")
+        .replace("–", "-")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+        .replace("…", "...")
+    )
+    if not cleaned_text:
+        raise ValueError("Teks untuk voiceover kosong.")
+
+    chunks = _split_text_into_chunks(cleaned_text, max_chars=4000)
+    logger.info(
+        f"Generating OpenAI TTS voiceover (model={OPENAI_TTS_MODEL}, voice={OPENAI_TTS_VOICE}) "
+        f"— {len(chunks)} chunk(s), total {len(cleaned_text)} chars"
+    )
+
+    try:
+        import requests
+
+        url = "https://api.openai.com/v1/audio/speech"
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        if len(chunks) == 1:
+            # Fast path: single request
+            payload = {
+                "model": OPENAI_TTS_MODEL,
+                "input": chunks[0],
+                "voice": OPENAI_TTS_VOICE,
+                "response_format": "mp3",
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=180)
+            resp.raise_for_status()
+
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+
+        else:
+            # Multi-chunk: synthesize to temp files then concat with FFmpeg
+            # (avoids audioop/pyaudioop dependency that pydub needs on Python 3.13+)
+            chunk_files: list[Path] = []
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+
+                for idx, chunk in enumerate(chunks):
+                    payload = {
+                        "model": OPENAI_TTS_MODEL,
+                        "input": chunk,
+                        "voice": OPENAI_TTS_VOICE,
+                        "response_format": "mp3",
+                    }
+                    resp = requests.post(url, headers=headers, json=payload, timeout=180)
+                    resp.raise_for_status()
+
+                    chunk_path = tmpdir_path / f"tts_chunk_{idx:03d}.mp3"
+                    chunk_path.write_bytes(resp.content)
+                    chunk_files.append(chunk_path)
+                    logger.info(f"  Chunk {idx+1}/{len(chunks)} synthesized ({len(chunk)} chars)")
+
+                # Concatenate MP3s using FFmpeg concat demuxer (fast, stream copy, no re-encode)
+                _concat_mp3_chunks_ffmpeg(chunk_files, output_path)
+                logger.info(f"  Concatenated {len(chunks)} chunks with FFmpeg → final audio")
+
+        file_size = output_path.stat().st_size
+        if file_size < 100:
+            output_path.unlink(missing_ok=True)
+            raise RuntimeError("OpenAI TTS mengembalikan audio kosong / terlalu kecil.")
+
+        logger.info(f"OpenAI TTS voiceover saved: {output_path} ({file_size} bytes)")
+        return output_path
+
+    except requests.exceptions.HTTPError as e:
+        status = getattr(e.response, "status_code", "?")
+        err_detail = ""
+        try:
+            if e.response is not None:
+                err_detail = e.response.json().get("error", {}).get("message", str(e))
+        except Exception:
+            err_detail = str(e)
+        logger.error(f"OpenAI TTS HTTP error: {err_detail}")
+        raise RuntimeError(
+            f"OpenAI TTS gagal (HTTP {status}):\n{err_detail}\n\n"
+            "Pastikan:\n"
+            "• OPENAI_API_KEY valid dan ada kredit\n"
+            "• Model valid: tts-1 atau tts-1-hd\n"
+            "• Voice valid: onyx, nova, alloy, echo, shimmer, fable\n"
+            "• Teks per chunk <= 4096 karakter (kami sudah auto-split berdasarkan kalimat)\n"
+            "Lihat https://platform.openai.com/docs/guides/text-to-speech"
+        ) from e
+    except Exception as e:
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+        logger.error(f"OpenAI TTS gagal: {e}")
+        raise RuntimeError(
+            f"OpenAI TTS synthesis gagal: {e}\n\n"
+            "Cek koneksi internet, API key, dan quota di https://platform.openai.com/usage"
+        ) from e
+
+
 def generate_xtts_voiceover(
     script_text: str,
     output_name: Optional[str] = None,
@@ -300,9 +574,10 @@ def generate_voiceover(
     High-level dispatcher berdasarkan TTS_PROVIDER di .env.
 
     Provider yang didukung:
-    - edge-tts (default, online)
+    - edge-tts (default, online gratis tapi kadang unreliable)
     - xtts     (local, lebih reliable)
     - piper    (local, paling cepat & reliable untuk automation)
+    - openai   (cloud API reliable, mudah, biaya kecil; auto-split untuk script panjang)
     """
     provider = TTS_PROVIDER.lower().strip()
 
@@ -321,6 +596,9 @@ def generate_voiceover(
         ref = clone_reference or (Path(TTS_REFERENCE_AUDIO) if TTS_REFERENCE_AUDIO else None)
         return generate_xtts_voiceover(script_text, output_name, ref)
 
+    elif provider == "openai":
+        return generate_openai_voiceover(script_text, output_name)
+
     else:
         # Default / edge-tts
         if clone_reference and clone_reference.exists():
@@ -338,6 +616,7 @@ def generate_voiceover(
                     "\n❌ Gagal generate voiceover dengan edge-tts.\n"
                     f"Voice: {voice or TTS_VOICE}\n\n"
                     "Karena edge-tts kurang reliable (online), pertimbangkan:\n"
+                    "• Set TTS_PROVIDER=openai + OPENAI_API_KEY (reliable cloud API, mudah setup, auto-split script panjang)\n"
                     "• Set TTS_PROVIDER=xtts + TTS_REFERENCE_AUDIO (local, lebih stabil)\n"
                     "• Atau TTS_PROVIDER=piper (paling reliable & offline)\n\n"
                     "Lihat detail di .env.example dan QUICKSTART.md"

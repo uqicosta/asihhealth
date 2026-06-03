@@ -53,7 +53,6 @@ def main():
         ("edge-tts", "pip install edge-tts"),
         ("ollama", "pip install ollama"),
         ("faster-whisper", "pip install faster-whisper"),
-        ("pydub", "pip install pydub"),
         ("rich", "pip install rich typer"),
     ]
 

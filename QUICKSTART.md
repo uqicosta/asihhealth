@@ -66,19 +66,44 @@ Model Groq yang bagus:
 
 **Penting**: Jangan gunakan model Ollama (`qwen2.5:7b`) saat pakai Groq. Nama model harus sesuai Groq.
 
-### (Opsional tapi sangat direkomendasikan) Dapatkan Pexels API Key (Gratis)
-1. Daftar di https://www.pexels.com/api/
-2. Copy API key
-3. Tambahkan ke file `.env` → `PEXELS_API_KEY=xxxxxxxx`
+### (Opsional) Stock Images untuk Video (Pexels atau OpenAI)
+- Default: Pexels (gratis) → butuh `PEXELS_API_KEY`
+- Alternatif: OpenAI DALL·E untuk gambar kustom → set `ASSET_IMAGE_PROVIDER=openai` (pakai OPENAI_API_KEY yang sama)
+1. Untuk Pexels: Daftar di https://www.pexels.com/api/ → copy key ke `.env`
+2. Atau untuk AI images: `ASSET_IMAGE_PROVIDER=openai`
 
-Ini memungkinkan video dengan gambar stock berkualitas tinggi + efek Ken Burns.
+Keduanya mendukung efek Ken Burns di video.
 
 ### Rekomendasi TTS yang Lebih Reliable (edge-tts sering bermasalah)
 edge-tts bagus tapi **kurang reliable** karena tergantung layanan online Microsoft.
 
-Untuk penggunaan scheduler / daily / production, **sangat disarankan** pindah ke local TTS:
+Untuk penggunaan scheduler / daily / production, **sangat disarankan** pakai salah satu opsi berikut:
 
-**XTTS (paling direkomendasikan untuk kualitas & reliability di Windows):**
+**Opsi #1 Paling Mudah: OpenAI TTS (Cloud API) — Direkomendasikan jika tidak mau ribet install**
+
+- Tidak butuh Python khusus, tidak butuh model 2GB, tidak butuh espeak-ng.
+- Kualitas narasi sangat natural.
+- Biaya sangat murah (tts-1 ≈ Rp15 per 1000 karakter / ~Rp250 per video 5-7 menit).
+- Setup paling cepat:
+
+1. Daftar & buat API key di https://platform.openai.com/api-keys (gratis credit pertama kali)
+2. Copy key (format `sk-...`)
+3. Tambahkan ke file `.env` (copy dari `.env.example`):
+
+```env
+TTS_PROVIDER=openai
+OPENAI_API_KEY=sk-proj-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+# Pilihan bagus:
+OPENAI_TTS_VOICE=onyx          # male deep, cocok narasi kesehatan
+# OPENAI_TTS_VOICE=nova        # female
+OPENAI_TTS_MODEL=tts-1         # atau tts-1-hd untuk kualitas lebih tinggi
+```
+
+Selesai. Jalankan pipeline seperti biasa — otomatis pakai OpenAI TTS.
+
+Script yang panjang (lebih dari ~4000 karakter) akan otomatis dipecah menjadi beberapa panggilan API dan hasil audionya digabungkan.
+
+**Opsi #2 (Gratis Total): XTTS (paling direkomendasikan untuk kualitas & reliability di Windows jika mau full offline)**
 
 **Syarat wajib:** Python 3.9 atau 3.10 (lihat bagian paling atas tentang Python version requirement).
 
@@ -103,7 +128,7 @@ Model ~2GB akan download otomatis pertama kali.
 
 Jika masih error, pesan error sekarang sudah sangat detail.
 
-Atau untuk yang paling ringan & cepat (sangat direkomendasikan untuk scheduler):
+**Opsi #3 Super Ringan & Cepat (Gratis Total, sangat direkomendasikan untuk scheduler):**
 
 ```powershell
 python scripts/download_piper_voice.py
@@ -229,8 +254,9 @@ Rekomendasi:
 | Hal | Rekomendasi |
 |-----|-------------|
 | LLM | Ollama `qwen2.5:7b` (gratis + bagus untuk ID) |
-| TTS | edge-tts (gratis + paling natural untuk ID) |
-| Subtitle | faster-whisper `base` (cukup akurat) |
+| TTS | edge-tts (default) / openai (API mudah & reliable) / piper (ringan gratis) |
+| Subtitle | faster-whisper guided by generated script (lebih akurat + sesuai naskah) |
+| Thumbnail | Pillow (gratis) atau OpenAI DALL·E (custom AI image via THUMBNAIL_PROVIDER) |
 | Video style | Mulai dengan "simple" dulu |
 | Panjang script | 8-11 menit paling optimal |
 
@@ -293,7 +319,16 @@ Requires-Python >=3.7.0,<3.11
 **"No audio was received" / edge_tts.exceptions.NoAudioReceived**  
 Ini error umum dari Microsoft Edge TTS service. Penyebab & solusi:
 
-Karena edge-tts kurang reliable, **solusi terbaik** adalah pindah ke local TTS:
+Karena edge-tts kurang reliable, **solusi terbaik & termudah** adalah pindah ke OpenAI TTS (cloud API):
+
+Di `.env`:
+```env
+TTS_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_TTS_VOICE=onyx
+```
+
+Atau (gratis total) pindah ke local TTS:
 
 ```powershell
 python scripts/download_piper_voice.py
@@ -330,10 +365,13 @@ Piper membutuhkan espeak-ng untuk mengubah teks Indonesia menjadi fonem.
 3. Restart PowerShell / terminal Anda.
 4. Coba generate lagi.
 
-Jika masih bermasalah, lebih mudah pindah ke:
+Jika masih bermasalah, lebih mudah pindah ke OpenAI (paling simpel) atau XTTS:
 ```env
-TTS_PROVIDER=xtts
-TTS_REFERENCE_AUDIO=assets/voices/reference/narator.wav
+TTS_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+# atau
+# TTS_PROVIDER=xtts
+# TTS_REFERENCE_AUDIO=assets/voices/reference/narator.wav
 ```
 
 Kode pipeline sekarang akan mendeteksi file 0KB dan memberikan pesan error yang jelas.

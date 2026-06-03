@@ -6,6 +6,8 @@ Usage examples:
     python pipeline/run.py --topic "Bahaya terlalu banyak minum kopi"
     python pipeline/run.py --topic "..." --model llama-3.3-70b-versatile --voice id-ID-GadisNeural
     python pipeline/run.py --topic "..." --only-script-voice
+    # Resume after script + voice already generated (skip LLM + TTS):
+    python pipeline/run.py --topic "..." --script output/scripts/20260603_....json --audio output/audio/voice_xxx.mp3 --use-stock
 """
 
 # --- Path fix for direct script execution ---
@@ -32,7 +34,9 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from config.settings import (
     OUTPUT_SCRIPTS, OUTPUT_AUDIO, OUTPUT_VIDEOS,
     TTS_VOICE, TTS_PROVIDER, TTS_REFERENCE_AUDIO,
-    USE_STOCK_VISUALS, NUM_STOCK_IMAGES, PEXELS_API_KEY
+    USE_STOCK_VISUALS, NUM_STOCK_IMAGES, PEXELS_API_KEY,
+    ASSET_IMAGE_PROVIDER,
+    SUBTITLE_MAX_CHARS_PER_LINE, SUBTITLE_MAX_LINES
 )
 from core.llm import LLMClient, generate_health_script
 from core.tts import generate_voiceover, estimate_duration
@@ -72,6 +76,8 @@ def run_full_pipeline(
     auto_upload: bool = False,
     youtube_privacy: str = "private",
     voice_clone_reference: Optional[Path] = None,
+    script_json: Optional[str] = None,
+    existing_audio: Optional[str] = None,
 ):
     """
     Full automation pipeline for Indonesian health YouTube content.
@@ -82,47 +88,68 @@ def run_full_pipeline(
         border_style="blue"
     ))
 
-    # === STEP 1: Generate Script ===
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-        task = progress.add_task("Generating script with LLM...", total=None)
-        client = LLMClient(model=model)
-        console.print(f"[dim]LLM Provider: {client.provider} | Model: {client.model}[/dim]")
-        script_data = generate_health_script(topic, client=client)
-        script_path = save_script_json(script_data, topic)
-        progress.update(task, description="Script generated ✓")
+    # === STEP 1: Script (generate or load existing) ===
+    if script_json:
+        script_path = Path(script_json)
+        if not script_path.exists():
+            raise FileNotFoundError(f"Script JSON not found: {script_path}")
+        script_data = json.loads(script_path.read_text(encoding="utf-8"))
+        console.print(f"\n[green]✓[/green] Loaded existing script: [link={script_path}]{script_path.name}[/link]")
+        console.print(f"   Title: [bold]{script_data.get('title', '?')}[/bold]")
+        console.print(f"   Est. duration: ~{script_data.get('estimated_duration_minutes', '?')} menit")
+    else:
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+            task = progress.add_task("Generating script with LLM...", total=None)
+            client = LLMClient(model=model)
+            console.print(f"[dim]LLM Provider: {client.provider} | Model: {client.model}[/dim]")
+            script_data = generate_health_script(topic, client=client)
+            script_path = save_script_json(script_data, topic)
+            progress.update(task, description="Script generated ✓")
 
-    console.print(f"\n[green]✓[/green] Script saved: [link={script_path}]{script_path.name}[/link]")
-    console.print(f"   Title: [bold]{script_data['title']}[/bold]")
-    console.print(f"   Est. duration: ~{script_data.get('estimated_duration_minutes', '?')} menit")
+        console.print(f"\n[green]✓[/green] Script saved: [link={script_path}]{script_path.name}[/link]")
+        console.print(f"   Title: [bold]{script_data['title']}[/bold]")
+        console.print(f"   Est. duration: ~{script_data.get('estimated_duration_minutes', '?')} menit")
 
     if only_script_voice:
         # Stop here
+        if existing_audio:
+            console.print(f"\n[yellow]--only-script-voice + existing audio provided: nothing more to generate.[/yellow]")
+            console.print(f"[green]✓[/green] Using audio: {existing_audio}")
+            return
         console.print("\n[yellow]--only-script-voice mode: stopping after script + voice generation.[/yellow]")
         _generate_voice_only(script_data, voice)
         return
 
-    # === STEP 2: Generate Voiceover ===
+    # === STEP 2: Voiceover (generate or use existing) ===
     script_text = script_data["script"]
     clone_ref = voice_clone_reference
 
-    # Auto use reference from env if using local TTS provider and no CLI override
+    # Auto use reference from env if using local TTS provider (xtts/piper) and no CLI override
+    # (openai and edge-tts do not use reference audio)
     if not clone_ref and TTS_PROVIDER.lower() in ("xtts", "piper") and TTS_REFERENCE_AUDIO:
         clone_ref = Path(TTS_REFERENCE_AUDIO)
 
-    task_desc = f"Generating voiceover ({TTS_PROVIDER})..."
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-        task = progress.add_task(task_desc, total=None)
-        try:
-            audio_path = generate_voiceover(script_text, voice=voice, clone_reference=clone_ref)
-        except Exception as tts_err:
-            progress.update(task, description="Voiceover gagal ✗")
-            console.print(f"\n[bold red]Error saat generate voiceover:[/bold red]")
-            console.print(str(tts_err))
-            console.print("\n[yellow]Tips: Untuk reliability lebih baik, set TTS_PROVIDER=xtts atau piper + reference audio di .env.[/yellow]")
-            console.print("[yellow]PENTING: TTS/XTTS butuh Python 3.9 atau 3.10. Kamu pakai 3.14 → lihat QUICKSTART.md 'Python Version'.[/yellow]")
-            raise
-        progress.update(task, description="Voiceover generated ✓")
+    if existing_audio:
+        audio_path = Path(existing_audio)
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        console.print(f"[green]✓[/green] Using existing voiceover: {audio_path.name}")
+    else:
+        task_desc = f"Generating voiceover ({TTS_PROVIDER})..."
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+            task = progress.add_task(task_desc, total=None)
+            try:
+                audio_path = generate_voiceover(script_text, voice=voice, clone_reference=clone_ref)
+            except Exception as tts_err:
+                progress.update(task, description="Voiceover gagal ✗")
+                console.print(f"\n[bold red]Error saat generate voiceover:[/bold red]")
+                console.print(str(tts_err))
+                console.print("\n[yellow]Tips: Untuk reliability lebih baik, set TTS_PROVIDER=openai (cloud API, auto-split script panjang) atau xtts/piper + reference audio di .env.[/yellow]")
+                console.print("[yellow]PENTING: TTS/XTTS butuh Python 3.9 atau 3.10. Kamu pakai 3.14 → lihat QUICKSTART.md 'Python Version'.[/yellow]")
+                raise
+            progress.update(task, description="Voiceover generated ✓")
 
+    # Always show audio info (for both generated and resumed)
     console.print(f"[green]✓[/green] Audio: {audio_path.name}  |  Est. duration: {estimate_duration(script_text)} menit")
 
     if not generate_video:
@@ -140,17 +167,20 @@ def run_full_pipeline(
     stock_images: List[Path] = []
 
     if effective_use_stock:
+        provider = ASSET_IMAGE_PROVIDER
+        action = "Generating AI images with OpenAI" if provider == "openai" else "Downloading free stock images from Pexels"
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-            task = progress.add_task("Downloading free stock images from Pexels...", total=None)
+            task = progress.add_task(f"{action}...", total=None)
             stock_images = download_stock_for_topic(
                 topic=topic,
                 script_text=script_text,
                 num_images=NUM_STOCK_IMAGES,
-                api_key=PEXELS_API_KEY or None
+                api_key=PEXELS_API_KEY or None,
+                script_data=script_data if 'script_data' in locals() else None,
             )
-            progress.update(task, description="Stock images downloaded ✓")
+            progress.update(task, description="Stock images ready ✓")
 
-        console.print(f"[green]✓[/green] {len(stock_images)} stock images ready for visuals")
+        console.print(f"[green]✓[/green] {len(stock_images)} stock images ready for visuals (provider: {ASSET_IMAGE_PROVIDER})")
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
         if stock_images:
@@ -208,7 +238,16 @@ def run_full_pipeline(
     if burn_subtitles and 'video_path' in locals():
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
             task = progress.add_task("Generating subtitles with Whisper + burning...", total=None)
-            srt_path, final_video = create_subtitles_and_burn(audio_path, video_path)
+            # Pass the original LLM-generated script so Whisper can use it as prompt.
+            # This gives much higher quality subtitles than pure audio transcription
+            # (correct medical terms, no hallucinations, matches the intended narration exactly).
+            script_for_subs = script_data.get("script") if 'script_data' in locals() else None
+            srt_path, final_video = create_subtitles_and_burn(
+                audio_path, video_path,
+                script_text=script_for_subs,
+                max_chars_per_line=SUBTITLE_MAX_CHARS_PER_LINE,
+                max_lines=SUBTITLE_MAX_LINES,
+            )
             progress.update(task, description="Subtitles burned ✓")
 
         console.print(f"[green]✓[/green] Final video with subtitles: [bold]{final_video.name}[/bold]")
@@ -249,7 +288,7 @@ def _generate_voice_only(script_data: dict, voice: str):
     except Exception as tts_err:
         console.print(f"\n[bold red]Error saat generate voiceover (only-script-voice mode):[/bold red]")
         console.print(str(tts_err))
-        console.print("\n[yellow]Tips: Untuk lebih reliable gunakan local TTS (xtts/piper) via .env.[/yellow]")
+        console.print("\n[yellow]Tips: Untuk lebih reliable gunakan TTS_PROVIDER=openai (API, auto-split untuk script panjang) atau local TTS (xtts/piper) via .env.[/yellow]")
         console.print("[yellow]PENTING: TTS/XTTS butuh Python 3.9 atau 3.10. Kamu pakai 3.14 → lihat QUICKSTART.md 'Python Version'.[/yellow]")
         raise
 
@@ -258,23 +297,40 @@ def main():
     parser = argparse.ArgumentParser(
         description="AsihHealth - Otomasi Konten YouTube Berbahasa Indonesia (Cost Efficient)"
     )
-    parser.add_argument("--topic", "-t", required=True, help="Topik video kesehatan (dalam bahasa Indonesia)")
+    parser.add_argument("--topic", "-t", required=False, help="Topik video kesehatan (dalam bahasa Indonesia). Wajib kecuali --script disediakan.")
     parser.add_argument("--model", "-m", default=None, 
                         help="LLM model name. Default depends on LLM_PROVIDER in .env "
                              "(qwen2.5:7b for Ollama, llama-3.3-70b-versatile for Groq, etc.)")
     parser.add_argument("--voice", "-v", default=TTS_VOICE, 
-                        help="Voice (untuk edge-tts). Untuk provider lokal, gunakan TTS_REFERENCE_AUDIO di .env")
-    parser.add_argument("--no-video", action="store_true", help="Hanya generate script + voiceover")
+                        help="Voice (untuk edge-tts). Untuk openai gunakan OPENAI_TTS_VOICE di .env. Untuk provider lokal, gunakan TTS_REFERENCE_AUDIO.")
+    parser.add_argument("--no-video", action="store_true", help="Hanya generate script + voiceover (lalu resume nanti pakai --script --audio)")
     parser.add_argument("--no-subtitles", action="store_true", help="Skip auto subtitle generation")
-    parser.add_argument("--only-script-voice", action="store_true", help="Stop setelah script + voice (untuk editing manual)")
-    parser.add_argument("--use-stock", action="store_true", help="Force download & use Pexels stock images (Ken Burns style)")
+    parser.add_argument("--only-script-voice", action="store_true", help="Stop setelah script + voice (untuk editing manual). Gunakan --script + --audio untuk resume nanti.")
+    parser.add_argument("--use-stock", action="store_true", help="Use stock images for video (Pexels or OpenAI DALL·E depending on ASSET_IMAGE_PROVIDER)")
     parser.add_argument("--no-stock", action="store_true", help="Force simple background video (no stock download)")
     parser.add_argument("--no-thumbnail", action="store_true", help="Skip automatic thumbnail generation")
     parser.add_argument("--upload", action="store_true", help="Upload otomatis ke YouTube setelah selesai (private by default)")
     parser.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"], help="Privacy status untuk upload")
     parser.add_argument("--voice-clone", type=str, default=None, help="Path ke reference audio untuk voice cloning (XTTS). Contoh: assets/voices/reference/narator.wav")
+    parser.add_argument("--script", type=str, default=None,
+                        help="Path ke script JSON existing (output/scripts/....json) untuk skip generate script (LLM)")
+    parser.add_argument("--audio", type=str, default=None,
+                        help="Path ke file audio/voiceover existing untuk skip TTS generation. Gunakan bersama --script untuk melanjutkan dari video creation.")
 
     args = parser.parse_args()
+
+    if not args.topic and not args.script:
+        parser.error("--topic is required (unless you provide --script to resume from an existing script JSON)")
+
+    # If resuming with --script but no --topic, try to use the title from the script JSON for display/stock queries
+    effective_topic = args.topic
+    if not effective_topic and args.script:
+        try:
+            with open(args.script, encoding="utf-8") as f:
+                tmp_script = json.load(f)
+            effective_topic = tmp_script.get("title") or Path(args.script).stem
+        except Exception:
+            effective_topic = "resumed-video"
 
     # Resolve stock preference from CLI + config
     use_stock_final = USE_STOCK_VISUALS
@@ -286,7 +342,7 @@ def main():
     clone_ref = Path(args.voice_clone) if args.voice_clone else None
 
     run_full_pipeline(
-        topic=args.topic,
+        topic=effective_topic,
         model=args.model,
         voice=args.voice,
         generate_video=not args.no_video,
@@ -297,6 +353,8 @@ def main():
         auto_upload=args.upload,
         youtube_privacy=args.privacy,
         voice_clone_reference=clone_ref,
+        script_json=args.script,
+        existing_audio=args.audio,
     )
 
 

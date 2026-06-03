@@ -6,7 +6,12 @@ ollama>=0.3.0
 
 # === TTS (edge-tts - Gratis, Kualitas Terbaik untuk ID) ===
 edge-tts>=6.1.12
-pydub>=0.25.1
+
+# OpenAI TTS (opsional, via TTS_PROVIDER=openai) — reliable cloud API, tidak butuh extra package
+# (menggunakan `requests` yang sudah ada). Butuh OPENAI_API_KEY di .env. Lihat .env.example
+# Catatan: Penggabungan chunk audio untuk script panjang menggunakan FFmpeg (bukan pydub)
+# agar kompatibel dengan Python 3.13+ (audioop dihapus dari stdlib).
+
 
 # === Subtitle (faster-whisper - lokal & akurat) ===
 faster-whisper>=1.0.0
@@ -38,6 +43,8 @@ schedule>=1.2.2       # For daily scheduler loop
 # ⚠️  PENTING: TTS package (untuk xtts) HANYA support Python 3.7 sampai 3.10
 #    Kalau kamu pakai Python 3.11+ (termasuk 3.14) → "No matching distribution found for TTS"
 #    → Lihat QUICKSTART.md bagian "PENTING: Python Version"
+#
+# Alternatif super gampang tanpa install berat: TTS_PROVIDER=openai (lihat .env.example + OPENAI_API_KEY)
 #
 # pip install piper-tts   # untuk TTS_PROVIDER=piper (ringan, cepat, offline). Butuh espeak-ng di Windows.
 # pip install TTS         # untuk TTS_PROVIDER=xtts (kualitas bagus, multilingual, ~2GB model)

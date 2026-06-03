@@ -1,12 +1,12 @@
 """
 AsihHealth - Stock Footage / Image Downloader
-Cost-efficient visuals using free stock APIs.
+Cost-efficient visuals using free stock APIs or AI generation.
 
-Primary: Pexels (recommended)
-- Free API key: https://www.pexels.com/api/
-- High quality, curated, no attribution required for most uses
+Providers (ASSET_IMAGE_PROVIDER in .env):
+- "pexels" (default): Download from Pexels (free with API key)
+- "openai": Generate custom images with DALL·E (paid, but highly relevant to your script)
 
-Fallback: Local images in assets/stock/
+Images are saved to assets/stock/ and used for Ken Burns video effect.
 """
 
 import logging
@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Dict
 import requests
-from config.settings import ASSETS_DIR
+from config.settings import ASSETS_DIR, ASSET_IMAGE_PROVIDER, OPENAI_API_KEY, OPENAI_THUMBNAIL_MODEL, OPENAI_THUMBNAIL_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -198,22 +198,162 @@ def get_relevant_queries_from_script(script_text: str, max_queries: int = 8) -> 
     return queries[:max_queries]
 
 
+def _generate_openai_stock_for_topic(
+    topic: str,
+    script_text: str = "",
+    num_images: int = 8,
+    script_data: Optional[dict] = None,
+) -> List[Path]:
+    """
+    Generate custom stock images using OpenAI DALL·E instead of downloading from Pexels.
+    Uses the script/topic/key_points to create highly relevant visual prompts.
+    """
+    if not OPENAI_API_KEY:
+        logger.warning("OPENAI_API_KEY not configured. Cannot generate OpenAI assets.")
+        return []
+
+    stock_dir = ASSETS_DIR / "stock"
+    stock_dir.mkdir(parents=True, exist_ok=True)
+
+    queries = get_relevant_queries_from_script(script_text or topic)
+    logger.info(f"Generating OpenAI DALL·E stock images for: {queries[:3]}...")
+
+    downloaded: List[Path] = []
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    for query in queries:
+        if len(downloaded) >= num_images:
+            break
+
+        # Build a prompt optimized for video backgrounds (Ken Burns zoom/pan friendly).
+        # Use the central style reference file for visual consistency.
+        style_block = ""
+        try:
+            style_path = Path(__file__).parent.parent / "templates" / "prompts" / "image_style_block_assets.txt"
+            if style_path.exists():
+                style_block = style_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+
+        if not style_block:
+            style_block = (
+                "high-quality detailed cinematic still for Indonesian health education video, "
+                "photorealistic or clean artistic illustration, natural lighting, rich but clean composition, "
+                "suitable for slow Ken Burns zoom and pan effect, subtle medical and wellness elements, "
+                "Indonesian cultural context, professional stock photo aesthetic, high resolution, "
+                "16:9 landscape, no text, no watermarks, no logos"
+            )
+
+        prompt = (
+            f"High-quality, detailed cinematic still for an Indonesian health education video about '{query}'. "
+            f"{style_block}."
+        )
+
+        if script_data and script_data.get("key_points"):
+            points = "; ".join(script_data["key_points"][:3])
+            prompt += f" Key visual themes: {points}."
+        elif script_text:
+            # Fallback short context
+            context = " ".join(script_text.split()[:50])
+            prompt += f" Visual context: {context}"
+
+        model = OPENAI_THUMBNAIL_MODEL or "dall-e-3"
+        # Choose a supported size for the model (dall-e-2 only supports square sizes up to 1024)
+        size = OPENAI_THUMBNAIL_SIZE or "1792x1024"
+        if "dall-e-2" in model.lower():
+            size = "1024x1024"
+
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "size": size,
+        }
+        # "quality" and "response_format" are only for dall-e-3 / dall-e-2 respectively.
+        # dall-e-2 does not support "quality". dall-e-3 does not need/accept "response_format" in some cases.
+        # Omitting unknown params prevents "Unknown parameter" 400 errors.
+        if "dall-e-3" in model.lower() or not model or "dall-e" not in model.lower():
+            payload["quality"] = "standard"  # or "hd"
+        if "dall-e-2" in model.lower():
+            payload["response_format"] = "url"
+
+        try:
+            resp = requests.post(
+                "https://api.openai.com/v1/images/generations",
+                headers=headers,
+                json=payload,
+                timeout=90
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            image_url = data["data"][0]["url"]
+
+            # Download immediately (DALL-E URLs expire quickly)
+            img_resp = requests.get(image_url, timeout=60)
+            img_resp.raise_for_status()
+
+            safe_query = "".join(c if c.isalnum() or c in " _-" else "" for c in query)[:40].strip().replace(" ", "_")
+            filename = f"openai_{safe_query}_{int(time.time())}.png"
+            dest_path = stock_dir / filename
+
+            with open(dest_path, "wb") as f:
+                f.write(img_resp.content)
+
+            logger.info(f"Generated OpenAI asset image: {filename}")
+            downloaded.append(dest_path)
+            time.sleep(0.8)  # Rate limit courtesy
+
+        except requests.exceptions.HTTPError as e:
+            # Capture the actual OpenAI error message (critical for debugging 400s)
+            error_detail = str(e)
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    err_json = e.response.json()
+                    error_detail = err_json.get("error", {}).get("message", str(err_json))
+                except Exception:
+                    error_detail = e.response.text[:600]
+            logger.error(f"OpenAI image generation failed for query '{query}': {error_detail}")
+            continue
+        except Exception as e:
+            logger.error(f"OpenAI image generation failed for query '{query}': {e}")
+            continue
+
+    logger.info(f"Generated {len(downloaded)} OpenAI stock assets to {stock_dir}")
+    return downloaded
+
+
 def download_stock_for_topic(
     topic: str,
     script_text: str = "",
     num_images: int = 8,
     use_videos: bool = False,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    script_data: Optional[dict] = None,
 ) -> List[Path]:
     """
-    High-level function: Given a topic + script, download relevant free stock visuals.
-    Returns list of local file paths ready to be used in video assembly.
+    High-level function: Given a topic + script, get relevant stock visuals.
+    Provider is controlled by ASSET_IMAGE_PROVIDER env var:
+      - "pexels" (default): download from Pexels
+      - "openai": generate with DALL·E using the script for highly relevant images
+    Returns list of local file paths ready to be used in video assembly (Ken Burns).
+
+    script_data: optional full script dict (used to extract key_points for better OpenAI prompts)
     """
-    client = PexelsClient(api_key=api_key)
     stock_dir = ASSETS_DIR / "stock"
     stock_dir.mkdir(parents=True, exist_ok=True)
 
     queries = get_relevant_queries_from_script(script_text or topic)
+
+    if ASSET_IMAGE_PROVIDER == "openai":
+        return _generate_openai_stock_for_topic(
+            topic, script_text, num_images, script_data=script_data
+        )
+
+    # === Pexels path (original) ===
+    client = PexelsClient(api_key=api_key)
 
     logger.info(f"Searching stock visuals for: {queries[:3]}...")
 

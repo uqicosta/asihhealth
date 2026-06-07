@@ -14,13 +14,21 @@ Style:
 """
 
 import logging
-from pathlib import Path
-from typing import Optional, List
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import textwrap
+from pathlib import Path
+from typing import List, Optional
+
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+
 from config.settings import (
-    OUTPUT_THUMBNAILS, ASSETS_DIR, THUMBNAIL_ACCENT_COLOR,
-    THUMBNAIL_PROVIDER, OPENAI_API_KEY, OPENAI_THUMBNAIL_MODEL, OPENAI_THUMBNAIL_SIZE
+    OPENAI_API_KEY,
+    OPENAI_IMAGE_QUALITY,
+    OPENAI_IMAGE_RESPONSE_FORMAT,
+    OPENAI_THUMBNAIL_MODEL,
+    OPENAI_THUMBNAIL_SIZE,
+    OUTPUT_THUMBNAILS,
+    THUMBNAIL_ACCENT_COLOR,
+    THUMBNAIL_PROVIDER,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,9 +40,9 @@ THUMB_HEIGHT = 720
 def _get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     """Try to load a good system font for Indonesian text."""
     font_paths = [
-        r"C:\Windows\Fonts\arialbd.ttf",      # Arial Bold
+        r"C:\Windows\Fonts\arialbd.ttf",  # Arial Bold
         r"C:\Windows\Fonts\Arialbd.ttf",
-        r"C:\Windows\Fonts\segoeuib.ttf",     # Segoe UI Bold
+        r"C:\Windows\Fonts\segoeuib.ttf",  # Segoe UI Bold
         r"C:\Windows\Fonts\impact.ttf",
         r"C:\Windows\Fonts\tahomabd.ttf",
     ]
@@ -69,12 +77,22 @@ def _build_dalle_prompt(title: str, script_data: Optional[dict] = None) -> str:
     # Prefer thumbnail-specific block, fall back to general block
     style_block = ""
     try:
-        style_path = Path(__file__).parent.parent / "templates" / "prompts" / "image_style_block_thumbnail.txt"
+        style_path = (
+            Path(__file__).parent.parent
+            / "templates"
+            / "prompts"
+            / "image_style_block_thumbnail.txt"
+        )
         if style_path.exists():
             style_block = style_path.read_text(encoding="utf-8").strip()
         else:
             # fallback to general style
-            style_path = Path(__file__).parent.parent / "templates" / "prompts" / "image_style_block.txt"
+            style_path = (
+                Path(__file__).parent.parent
+                / "templates"
+                / "prompts"
+                / "image_style_block.txt"
+            )
             if style_path.exists():
                 style_block = style_path.read_text(encoding="utf-8").strip()
     except Exception:
@@ -124,11 +142,14 @@ def generate_openai_thumbnail_image(
     The caller (create_thumbnail) will still overlay the bold text on top.
     """
     if not OPENAI_API_KEY:
-        logger.warning("OPENAI_API_KEY not set. Cannot generate OpenAI thumbnail. Falling back.")
+        logger.warning(
+            "OPENAI_API_KEY not set. Cannot generate OpenAI thumbnail. Falling back."
+        )
         return None
 
     if output_name is None:
         import hashlib
+
         h = hashlib.md5(title.encode()).hexdigest()[:8]
         output_name = f"dalle_thumb_bg_{h}.png"
 
@@ -137,8 +158,10 @@ def generate_openai_thumbnail_image(
 
     prompt = _build_dalle_prompt(title, script_data)
 
-    logger.info(f"Generating DALL·E thumbnail background for: {title[:60]}...")
-    logger.debug(f"DALL·E prompt: {prompt[:200]}...")
+    logger.info(
+        f"Generating {OPENAI_THUMBNAIL_MODEL} thumbnail background for: {title[:60]}..."
+    )
+    logger.debug(f"{OPENAI_THUMBNAIL_MODEL} prompt: {prompt[:200]}...")
 
     try:
         import requests
@@ -149,10 +172,13 @@ def generate_openai_thumbnail_image(
             "Content-Type": "application/json",
         }
         model = OPENAI_THUMBNAIL_MODEL
+        model_lower = model.lower()
         size = OPENAI_THUMBNAIL_SIZE
         # dall-e-2 only supports square sizes
-        if model and "dall-e-2" in model.lower():
+        if "dall-e-2" in model_lower:
             size = "1024x1024"
+        elif "gpt-image-1" in model_lower:
+            size = "1024x1024" if "1024" in size else "1536x1024"
 
         payload = {
             "model": model,
@@ -160,29 +186,50 @@ def generate_openai_thumbnail_image(
             "n": 1,
             "size": size,
         }
-        # "quality" and "response_format" are only for dall-e-3 / dall-e-2 respectively.
-        # dall-e-2 does not support "quality". dall-e-3 does not need/accept "response_format" in some cases.
-        # Omitting unknown params prevents "Unknown parameter" 400 errors.
-        if "dall-e-3" in model.lower() or not model or "dall-e" not in model.lower():
-            payload["quality"] = "standard"  # or "hd"
-        if "dall-e-2" in model.lower():
-            payload["response_format"] = "url"
+        # Set quality based on model (or use OPENAI_IMAGE_QUALITY override if set).
+        if OPENAI_IMAGE_QUALITY:
+            payload["quality"] = OPENAI_IMAGE_QUALITY
+        elif "dall-e-2" in model_lower:
+            pass
+        elif "dall-e-3" in model_lower:
+            payload["quality"] = "standard"
+        elif "gpt-image-1" in model_lower:
+            payload["quality"] = "medium"
+        else:
+            payload["quality"] = "medium"
+
+        # response_format: only include for models that support it (dall-e-2 and dall-e-3).
+        # For gpt-image-1 and similar, it is not accepted (causes "unknown parameter").
+        # We default to b64_json for reliability (no URL expiration).
+        response_format = OPENAI_IMAGE_RESPONSE_FORMAT
+        if response_format and ("dall-e-2" in model_lower or "dall-e-3" in model_lower):
+            payload["response_format"] = response_format
 
         resp = requests.post(url, headers=headers, json=payload, timeout=120)
         resp.raise_for_status()
         data = resp.json()
 
-        image_url = data["data"][0]["url"]
+        image_item = data["data"][0]
 
-        # Download the image immediately (URLs expire after ~1 hour)
-        img_resp = requests.get(image_url, timeout=60)
-        img_resp.raise_for_status()
+        # Handle both b64_json (preferred) and url
+        if "b64_json" in image_item and image_item["b64_json"]:
+            import base64
+            image_bytes = base64.b64decode(image_item["b64_json"])
+            with open(output_path, "wb") as f:
+                f.write(image_bytes)
+            logger.info(f"OpenAI thumbnail background saved (b64_json): {output_path}")
+        else:
+            # Fallback to URL
+            image_url = image_item.get("url")
+            if not image_url:
+                raise RuntimeError("No image data returned from OpenAI")
+            # Download the image immediately (URLs expire after ~1 hour)
+            img_resp = requests.get(image_url, timeout=60)
+            img_resp.raise_for_status()
+            with open(output_path, "wb") as f:
+                f.write(img_resp.content)
+            logger.info(f"OpenAI thumbnail background saved (from url): {output_path}")
 
-        # Save as PNG
-        with open(output_path, "wb") as f:
-            f.write(img_resp.content)
-
-        logger.info(f"OpenAI thumbnail background saved: {output_path}")
         return output_path
 
     except requests.exceptions.HTTPError as e:
@@ -223,6 +270,7 @@ def create_thumbnail(
     """
     if output_name is None:
         import hashlib
+
         h = hashlib.md5(title.encode()).hexdigest()[:8]
         output_name = f"thumb_{h}.png"
 
@@ -286,7 +334,16 @@ def create_thumbnail(
         x = 60
 
         # Black outline for readability
-        for ox, oy in [(-3,-3), (-3,3), (3,-3), (3,3), (-2,0), (2,0), (0,-2), (0,2)]:
+        for ox, oy in [
+            (-3, -3),
+            (-3, 3),
+            (3, -3),
+            (3, 3),
+            (-2, 0),
+            (2, 0),
+            (0, -2),
+            (0, 2),
+        ]:
             draw.text((x + ox, y + oy), line, font=title_font, fill=(0, 0, 0, 220))
 
         # Main white text
@@ -298,11 +355,18 @@ def create_thumbnail(
 
     # Channel branding at bottom
     brand_text = f"▶ {channel_name}"
-    draw.text((60, THUMB_HEIGHT - 85), brand_text, font=brand_font, fill=(148, 163, 184))
+    draw.text(
+        (60, THUMB_HEIGHT - 85), brand_text, font=brand_font, fill=(148, 163, 184)
+    )
 
     # Small health badge
     badge = "EDUKASI KESEHATAN"
-    draw.text((THUMB_WIDTH - 340, THUMB_HEIGHT - 85), badge, font=subtitle_font, fill=(251, 191, 36))
+    draw.text(
+        (THUMB_WIDTH - 340, THUMB_HEIGHT - 85),
+        badge,
+        font=subtitle_font,
+        fill=(251, 191, 36),
+    )
 
     # Convert and save
     final = base.convert("RGB")
@@ -312,9 +376,7 @@ def create_thumbnail(
 
 
 def generate_thumbnails_for_script(
-    script_data: dict,
-    stock_images: Optional[List[Path]] = None,
-    count: int = 1
+    script_data: dict, stock_images: Optional[List[Path]] = None, count: int = 1
 ) -> List[Path]:
     """
     Generate thumbnail(s) from a script JSON + optional stock images.
@@ -340,8 +402,9 @@ def generate_thumbnails_for_script(
         name = None
         if count > 1:
             import hashlib
+
             h = hashlib.md5(title.encode()).hexdigest()[:6]
-            name = f"thumb_{h}_{i+1}.png"
+            name = f"thumb_{h}_{i + 1}.png"
 
         this_bg = bg
         if dalle_bgs:

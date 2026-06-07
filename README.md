@@ -11,7 +11,7 @@ Dibuat khusus untuk channel kesehatan (AsihHealth) tapi bisa digunakan untuk top
 | Fitur | Teknologi | Biaya |
 |-------|-----------|-------|
 | Penulisan Script | Ollama (Qwen2.5 / Llama3.1) | **Gratis** |
-| Voice Narasi (ID) | edge-tts (default) / openai / piper / xtts | **Gratis** atau sangat murah (openai ~Rp250/video) |
+| Voice Narasi (ID) | edge-tts (default) / openai / elevenlabs / piper / xtts | **Gratis** atau sangat murah (openai) hingga premium (elevenlabs) |
 | **Stock Visuals** | Pexels (default) atau OpenAI DALL·E (ASSET_IMAGE_PROVIDER=openai) + Ken Burns | Gratis atau murah |
 | Video Editing | FFmpeg (zoompan + xfade) | **Gratis** |
 | Auto Subtitle | faster-whisper | **Gratis** |
@@ -46,14 +46,14 @@ Topik / Keyword
 | Komponen | Rekomendasi | Alasan |
 |----------|-------------|--------|
 | **LLM** | Ollama + `qwen2.5:7b` atau `llama3.1:8b` | Sangat bagus untuk bahasa Indonesia, gratis total |
-| **TTS** | `edge-tts` (default) / `openai` (API reliable) / `piper` / `xtts` (local) | edge-tts kadang unreliable. `openai` = mudah & stabil (biaya kecil). Local piper/xtts = gratis total setelah setup. |
+| **TTS** | `edge-tts` (default) / `openai` / `elevenlabs` (cloud) / `piper` / `xtts` (local) | edge-tts kadang unreliable. `openai`/`elevenlabs` = mudah & stabil. Local piper/xtts = gratis total setelah setup. |
 | **Video Engine** | FFmpeg (via subprocess) | Paling cepat & efisien resource |
 | **Subtitle** | `faster-whisper` guided by the LLM-generated script | Akurat + faithful to the original script (bukan pure transcription) |
 | **Visual** | Pexels (gratis) atau OpenAI DALL·E (kustom) + Ken Burns | Tanpa biaya atau murah |
 
 Alternatif lebih murah (kalau tidak mau install Ollama):
 - LLM: Groq (Llama3-70B) atau Gemini Flash (sangat murah)
-- TTS: `openai` (cloud API, setup 1 menit) atau tetap pakai edge-tts
+- TTS: `openai` atau `elevenlabs` (cloud API, setup 1 menit) atau tetap pakai edge-tts
 
 ---
 
@@ -147,6 +147,21 @@ Karena edge-tts kadang kurang reliable (tergantung layanan online), untuk penggu
    OPENAI_TTS_MODEL=tts-1
    ```
 Lihat detail + contoh lengkap di `.env.example` dan QUICKSTART.md.
+
+**Opsi Kualitas Premium: ElevenLabs (Cloud API)**
+
+- Kualitas suara sering dianggap **paling natural & ekspresif** (lebih unggul daripada OpenAI TTS).
+- Support Bahasa Indonesia sangat baik (`eleven_multilingual_v2`).
+- Bisa pakai suara custom/cloned (buat di dashboard ElevenLabs → ambil Voice ID).
+- Biaya lebih tinggi, tapi hasilnya sering worth it untuk konten profesional.
+
+```env
+TTS_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=...
+ELEVENLABS_VOICE_ID=xxxxxxxxxxxxxxxxxxxx
+```
+
+Lihat QUICKSTART.md untuk panduan lengkap.
 
 **Opsi Terbaik (Gratis Total): XTTS (local)**
 **Syarat wajib:** Python 3.9 atau 3.10 (baca bagian "Python Version Requirement" di atas).
@@ -270,7 +285,7 @@ asihhealth/
 │   └── settings.py
 ├── core/
 │   ├── llm.py              # Ollama / Groq / Gemini client
-│   ├── tts.py              # TTS dispatcher (edge-tts + openai + piper + xtts)
+│   ├── tts.py              # TTS dispatcher (edge-tts + openai + elevenlabs + piper + xtts)
 │   ├── subtitles.py        # faster-whisper (guided by LLM script) + FFmpeg burn
 │   ├── video.py            # FFmpeg video assembly engine
 │   └── youtube.py          # Upload automation
@@ -309,7 +324,7 @@ Dari `edge-tts --list-voices`:
 | Item | Biaya per Video (10-12 menit) |
 |------|-------------------------------|
 | LLM (Ollama lokal) | Rp0 |
-| TTS (edge-tts / openai / piper / xtts) | Rp0 atau ~Rp250/video (openai) |
+| TTS (edge-tts / openai / elevenlabs / piper / xtts) | Rp0 atau ~Rp250/video (openai) / lebih mahal (elevenlabs) |
 | Whisper lokal | Rp0 |
 | FFmpeg | Rp0 |
 | Stock footage | Rp0 |
@@ -323,7 +338,7 @@ Kalau pakai API (Groq/Gemini):
 ## 📌 Roadmap
 
 - [x] Script generator + prompt kesehatan ID
-- [x] TTS integration (edge-tts + openai API + piper + xtts local)
+- [x] TTS integration (edge-tts + openai + elevenlabs API + piper + xtts local)
 - [x] FFmpeg video assembly (Ken Burns + Pexels stock)
 - [x] Auto subtitle + burn-in
 - [x] Thumbnail generator otomatis (Pillow + optional OpenAI DALL·E)

@@ -103,6 +103,31 @@ Selesai. Jalankan pipeline seperti biasa — otomatis pakai OpenAI TTS.
 
 Script yang panjang (lebih dari ~4000 karakter) akan otomatis dipecah menjadi beberapa panggilan API dan hasil audionya digabungkan.
 
+**Opsi #1.5 (Kualitas Tertinggi): ElevenLabs TTS (Cloud API Premium)**
+
+ElevenLabs sering dianggap **paling natural dan emosional** di antara cloud TTS (lebih baik daripada OpenAI TTS untuk banyak orang).
+
+- Support Bahasa Indonesia sangat bagus (pakai model `eleven_multilingual_v2`).
+- Bisa pakai voice cloning (rekam suara Anda sendiri di dashboard ElevenLabs → dapatkan Voice ID).
+- Biaya lebih tinggi daripada OpenAI (cek pricing di elevenlabs.io).
+- Setup sangat mudah (hanya API key + Voice ID).
+
+1. Daftar di https://elevenlabs.io (dapat free characters untuk tes).
+2. Pergi ke Voice Lab atau tab "Voices", pilih/clone voice yang Anda suka.
+3. Copy **Voice ID** (contoh: `21m00Tcm4TlvDq8ikWAM`).
+4. Tambahkan ke `.env`:
+
+```env
+TTS_PROVIDER=elevenlabs
+ELEVENLABS_API_KEY=sk_xxxxxxxxxxxxxxxxxxxxxxxx
+ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM     # ganti dengan Voice ID Anda
+# Opsional (default sudah sangat bagus):
+ELEVENLABS_MODEL=eleven_multilingual_v2
+# ELEVENLABS_MODEL=eleven_turbo_v2_5     # alternatif lebih cepat & murah
+```
+
+Script panjang otomatis dipecah + digabung (sama seperti OpenAI).
+
 **Opsi #2 (Gratis Total): XTTS (paling direkomendasikan untuk kualitas & reliability di Windows jika mau full offline)**
 
 **Syarat wajib:** Python 3.9 atau 3.10 (lihat bagian paling atas tentang Python version requirement).
@@ -254,7 +279,7 @@ Rekomendasi:
 | Hal | Rekomendasi |
 |-----|-------------|
 | LLM | Ollama `qwen2.5:7b` (gratis + bagus untuk ID) |
-| TTS | edge-tts (default) / openai (API mudah & reliable) / piper (ringan gratis) |
+| TTS | edge-tts (default) / openai / elevenlabs (cloud API) / piper (ringan gratis) / xtts |
 | Subtitle | faster-whisper guided by generated script (lebih akurat + sesuai naskah) |
 | Thumbnail | Pillow (gratis) atau OpenAI DALL·E (custom AI image via THUMBNAIL_PROVIDER) |
 | Video style | Mulai dengan "simple" dulu |

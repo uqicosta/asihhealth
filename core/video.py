@@ -5,6 +5,9 @@ Cost-efficient video creation using pure FFmpeg.
 Supported styles:
 - "simple": Solid background + centered text (title + key points)
 - "kenburns": Image slideshow with slow zoom/pan effect (requires images)
+
+Logo/watermark overlay can be added via add_logo_overlay() or automatically via
+LOGO_PATH etc in settings (applied in pipeline after subs).
 """
 
 import logging
@@ -289,6 +292,63 @@ def create_video_with_images(
         raise RuntimeError("Failed to mux final video")
 
     logger.info(f"✅ Ken Burns video created successfully: {output_path}")
+    return output_path
+
+
+def add_logo_overlay(
+    video_path: Path,
+    logo_path: Path,
+    output_path: Optional[Path] = None,
+    position: str = "bottom_right",
+    size: float = 0.08,
+    opacity: float = 0.75,
+) -> Path:
+    """
+    Overlay a logo/watermark on the video using FFmpeg.
+    The logo will be placed on top of everything (including subtitles if already burned).
+    """
+    if not logo_path or not logo_path.exists():
+        logger.warning("Logo file not found, skipping overlay.")
+        return video_path
+
+    if output_path is None:
+        output_path = video_path.parent / f"{video_path.stem}_with_logo.mp4"
+
+    # Map friendly position names to FFmpeg overlay expressions
+    pos_map = {
+        "bottom_right": "W-w-10:H-h-10",
+        "bottom_left": "10:H-h-10",
+        "top_right": "W-w-10:10",
+        "top_left": "10:10",
+    }
+    overlay_pos = pos_map.get(position, position)  # allow custom like "W-w-20:H-h-20"
+
+    # Scale logo relative to video width (e.g. size=0.08 means 8% of width)
+    scale = f"iw*{size}:-1"
+
+    # Apply opacity if less than 1.0
+    opacity_filter = f",colorchannelmixer=aa={opacity}" if opacity < 1.0 else ""
+
+    filter_complex = f"[1:v]scale={scale},format=rgba{opacity_filter}[logo];[0:v][logo]overlay={overlay_pos}"
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-i", str(logo_path),
+        "-filter_complex", filter_complex,
+        "-c:a", "copy",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "20",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+
+    if not _run_ffmpeg(cmd, "Adding logo/watermark overlay"):
+        logger.warning("Logo overlay failed. Returning original video without watermark.")
+        return video_path
+
+    logger.info(f"Logo overlay added: {output_path}")
     return output_path
 
 

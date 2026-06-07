@@ -36,11 +36,12 @@ from config.settings import (
     TTS_VOICE, TTS_PROVIDER, TTS_REFERENCE_AUDIO,
     USE_STOCK_VISUALS, NUM_STOCK_IMAGES, PEXELS_API_KEY,
     ASSET_IMAGE_PROVIDER,
-    SUBTITLE_MAX_CHARS_PER_LINE, SUBTITLE_MAX_LINES
+    SUBTITLE_MAX_CHARS_PER_LINE, SUBTITLE_MAX_LINES,
+    LOGO_PATH, LOGO_POSITION, LOGO_SIZE, LOGO_OPACITY
 )
 from core.llm import LLMClient, generate_health_script
 from core.tts import generate_voiceover, estimate_duration
-from core.video import create_simple_video, create_video_with_images, check_ffmpeg
+from core.video import create_simple_video, create_video_with_images, check_ffmpeg, add_logo_overlay
 from core.subtitles import create_subtitles_and_burn
 from core.assets import download_stock_for_topic
 from core.thumbnail import generate_thumbnails_for_script
@@ -144,7 +145,7 @@ def run_full_pipeline(
                 progress.update(task, description="Voiceover gagal ✗")
                 console.print(f"\n[bold red]Error saat generate voiceover:[/bold red]")
                 console.print(str(tts_err))
-                console.print("\n[yellow]Tips: Untuk reliability lebih baik, set TTS_PROVIDER=openai (cloud API, auto-split script panjang) atau xtts/piper + reference audio di .env.[/yellow]")
+                console.print("\n[yellow]Tips: Untuk reliability lebih baik, set TTS_PROVIDER=openai atau elevenlabs (cloud API, auto-split script panjang) atau xtts/piper + reference audio di .env.[/yellow]")
                 console.print("[yellow]PENTING: TTS/XTTS butuh Python 3.9 atau 3.10. Kamu pakai 3.14 → lihat QUICKSTART.md 'Python Version'.[/yellow]")
                 raise
             progress.update(task, description="Voiceover generated ✓")
@@ -217,23 +218,6 @@ def run_full_pipeline(
         if thumbnail_path:
             console.print(f"[green]✓[/green] Thumbnail: {thumbnail_path.name}")
 
-    # === STEP 5: Auto Upload to YouTube (optional) ===
-    if auto_upload and 'video_path' in locals():
-        console.print("\n[bold yellow]Memulai upload ke YouTube...[/bold yellow]")
-        try:
-            video_id = upload_complete_from_pipeline(
-                video_path=video_path,
-                script_json_path=script_path,
-                thumbnail_path=thumbnail_path,
-                privacy=youtube_privacy,
-            )
-            if video_id:
-                console.print(f"[green]✓ Upload berhasil![/green] https://youtu.be/{video_id}")
-            else:
-                console.print("[red]Upload gagal. Cek log.[/red]")
-        except Exception as e:
-            console.print(f"[red]Error upload: {e}[/red]")
-
     # === Auto Subtitles + Burn (after video) ===
     if burn_subtitles and 'video_path' in locals():
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
@@ -252,6 +236,52 @@ def run_full_pipeline(
 
         console.print(f"[green]✓[/green] Final video with subtitles: [bold]{final_video.name}[/bold]")
         console.print(f"   SRT: {srt_path.name}")
+
+    # === Logo / Watermark Overlay (applied last, on top of subtitles if present) ===
+    if LOGO_PATH:
+        logo_p = Path(LOGO_PATH)
+        if logo_p.exists():
+            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+                task = progress.add_task("Menambahkan logo/watermark...", total=None)
+                if 'final_video' in locals():
+                    final_video = add_logo_overlay(
+                        final_video,
+                        logo_p,
+                        position=LOGO_POSITION,
+                        size=LOGO_SIZE,
+                        opacity=LOGO_OPACITY,
+                    )
+                elif 'video_path' in locals():
+                    video_path = add_logo_overlay(
+                        video_path,
+                        logo_p,
+                        position=LOGO_POSITION,
+                        size=LOGO_SIZE,
+                        opacity=LOGO_OPACITY,
+                    )
+                    final_video = video_path
+                progress.update(task, description="Logo ditambahkan ✓")
+
+            console.print(f"[green]✓[/green] Logo overlay added")
+
+    # === STEP 5: Auto Upload to YouTube (optional) ===
+    # Upload is done here so the video includes subtitles + logo (if enabled)
+    if auto_upload and ('final_video' in locals() or 'video_path' in locals()):
+        console.print("\n[bold yellow]Memulai upload ke YouTube...[/bold yellow]")
+        upload_video = final_video if 'final_video' in locals() else video_path
+        try:
+            video_id = upload_complete_from_pipeline(
+                video_path=upload_video,
+                script_json_path=script_path,
+                thumbnail_path=thumbnail_path,
+                privacy=youtube_privacy,
+            )
+            if video_id:
+                console.print(f"[green]✓ Upload berhasil![/green] https://youtu.be/{video_id}")
+            else:
+                console.print("[red]Upload gagal. Cek log.[/red]")
+        except Exception as e:
+            console.print(f"[red]Error upload: {e}[/red]")
 
     # Final summary
     video_display = "N/A"
@@ -288,7 +318,7 @@ def _generate_voice_only(script_data: dict, voice: str):
     except Exception as tts_err:
         console.print(f"\n[bold red]Error saat generate voiceover (only-script-voice mode):[/bold red]")
         console.print(str(tts_err))
-        console.print("\n[yellow]Tips: Untuk lebih reliable gunakan TTS_PROVIDER=openai (API, auto-split untuk script panjang) atau local TTS (xtts/piper) via .env.[/yellow]")
+        console.print("\n[yellow]Tips: Untuk lebih reliable gunakan TTS_PROVIDER=openai atau elevenlabs (API, auto-split untuk script panjang) atau local TTS (xtts/piper) via .env.[/yellow]")
         console.print("[yellow]PENTING: TTS/XTTS butuh Python 3.9 atau 3.10. Kamu pakai 3.14 → lihat QUICKSTART.md 'Python Version'.[/yellow]")
         raise
 
@@ -309,6 +339,7 @@ def main():
     parser.add_argument("--use-stock", action="store_true", help="Use stock images for video (Pexels or OpenAI DALL·E depending on ASSET_IMAGE_PROVIDER)")
     parser.add_argument("--no-stock", action="store_true", help="Force simple background video (no stock download)")
     parser.add_argument("--no-thumbnail", action="store_true", help="Skip automatic thumbnail generation")
+    # Logo/watermark is configured via LOGO_PATH, LOGO_POSITION etc in .env (applied automatically to final video)
     parser.add_argument("--upload", action="store_true", help="Upload otomatis ke YouTube setelah selesai (private by default)")
     parser.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"], help="Privacy status untuk upload")
     parser.add_argument("--voice-clone", type=str, default=None, help="Path ke reference audio untuk voice cloning (XTTS). Contoh: assets/voices/reference/narator.wav")

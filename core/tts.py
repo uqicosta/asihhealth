@@ -2,12 +2,14 @@
 AsihHealth - Text-to-Speech Module
 
 Pilihan provider (set di .env TTS_PROVIDER):
-- edge-tts : gratis, kualitas bagus untuk ID, tapi kadang unreliable (online) - default
-- xtts     : local XTTS (Coqui), lebih reliable, butuh reference audio + pip install TTS (+ torch)
-- piper    : local Piper, paling ringan & cepat (offline), butuh espeak-ng di Windows
-- openai   : reliable paid cloud API via OpenAI TTS (mudah setup, kualitas bagus, tanpa install berat). Auto-splits long scripts (>4096 chars).
+- edge-tts   : gratis, kualitas bagus untuk ID, tapi kadang unreliable (online) - default
+- xtts       : local XTTS (Coqui), lebih reliable, butuh reference audio + pip install TTS (+ torch)
+- piper      : local Piper, paling ringan & cepat (offline), butuh espeak-ng di Windows
+- openai     : reliable paid cloud API via OpenAI TTS (mudah setup, kualitas bagus, tanpa install berat). Auto-splits long scripts.
+- elevenlabs : premium cloud via ElevenLabs (kualitas sangat natural & emosional, support ID bagus via multilingual_v2).
+               Butuh ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID. Auto-splits long scripts + FFmpeg concat.
 
-Untuk daily/scheduler generation, sangat direkomendasikan pakai local (xtts atau piper) atau openai (API reliable).
+Untuk daily/scheduler generation, sangat direkomendasikan pakai local (xtts atau piper) atau cloud reliable (openai / elevenlabs).
 Lihat QUICKSTART.md untuk instalasi detail.
 """
 
@@ -23,7 +25,9 @@ from config.settings import (
     TTS_PROVIDER, TTS_VOICE, TTS_REFERENCE_AUDIO,
     OUTPUT_AUDIO,
     PIPER_MODEL, PIPER_CONFIG,
-    OPENAI_API_KEY, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE
+    OPENAI_API_KEY, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE,
+    ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL,
+    ELEVENLABS_STABILITY, ELEVENLABS_SIMILARITY,
 )
 from core.voice_cloning import generate_cloned_voiceover
 
@@ -539,6 +543,181 @@ def generate_openai_voiceover(
         ) from e
 
 
+def generate_elevenlabs_voiceover(
+    script_text: str,
+    output_name: Optional[str] = None,
+) -> Path:
+    """
+    Generate voiceover using ElevenLabs TTS API (premium natural quality, excellent for Indonesian).
+
+    Requires ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in .env.
+    Uses high-quality multilingual model by default (great Indonesian support).
+
+    Long scripts are automatically split into safe chunks (~4500 chars) on sentence boundaries
+    and concatenated with FFmpeg (same reliable logic as OpenAI TTS).
+
+    Voice cloning: Create a custom voice in the ElevenLabs dashboard (Voice Lab) and use its voice_id.
+    """
+    if not ELEVENLABS_API_KEY:
+        raise ValueError(
+            "ELEVENLABS_API_KEY belum diset di .env.\n\n"
+            "Cara setup ElevenLabs TTS (kualitas premium):\n"
+            "1. Daftar di https://elevenlabs.io\n"
+            "2. Buka https://elevenlabs.io/app/voice-lab atau tab Voices\n"
+            "3. Pilih / clone voice yang bagus (atau pakai salah satu premade yang support multilingual)\n"
+            "4. Copy Voice ID (contoh: 21m00Tcm4TlvDq8ikWAM)\n"
+            "5. Tambahkan di .env:\n"
+            "   ELEVENLABS_API_KEY=sk_...\n"
+            "   ELEVENLABS_VOICE_ID=xxxxxxxxxxxxxxxxxxxxxxxx\n"
+            "   TTS_PROVIDER=elevenlabs\n"
+            "   # Opsional (rekomendasi default sudah bagus):\n"
+            "   ELEVENLABS_MODEL=eleven_multilingual_v2   # atau eleven_turbo_v2_5 (lebih cepat)\n"
+            "   ELEVENLABS_STABILITY=0.5\n"
+            "   ELEVENLABS_SIMILARITY=0.75\n\n"
+            "Catatan: Kualitas biasanya lebih natural & emosional daripada OpenAI TTS, tapi lebih mahal per karakter."
+        )
+
+    if not ELEVENLABS_VOICE_ID:
+        raise ValueError(
+            "ELEVENLABS_VOICE_ID belum diset.\n"
+            "Buka ElevenLabs dashboard → pilih voice → copy Voice ID → set di .env sebagai ELEVENLABS_VOICE_ID"
+        )
+
+    if not output_name:
+        import hashlib
+        h = hashlib.md5(script_text[:100].encode()).hexdigest()[:8]
+        output_name = f"voice_{h}.mp3"
+
+    output_path = OUTPUT_AUDIO / output_name
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Clean text (same as other providers)
+    cleaned_text = (
+        script_text.strip()
+        .replace("—", "-")
+        .replace("–", "-")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+        .replace("…", "...")
+    )
+    if not cleaned_text:
+        raise ValueError("Teks untuk voiceover kosong.")
+
+    # ElevenLabs per-request limit is generous (~5k chars), we use 4500 to be safe
+    chunks = _split_text_into_chunks(cleaned_text, max_chars=4500)
+    logger.info(
+        f"Generating ElevenLabs TTS voiceover (model={ELEVENLABS_MODEL}, voice_id={ELEVENLABS_VOICE_ID[:8]}...) "
+        f"— {len(chunks)} chunk(s), total {len(cleaned_text)} chars"
+    )
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY,
+    }
+
+    voice_settings = {
+        "stability": max(0.0, min(1.0, ELEVENLABS_STABILITY)),
+        "similarity_boost": max(0.0, min(1.0, ELEVENLABS_SIMILARITY)),
+        # "style": 0.0,                 # uncomment if you want to experiment (newer models)
+        # "use_speaker_boost": True,
+    }
+
+    try:
+        import requests
+
+        if len(chunks) == 1:
+            # Fast path
+            payload = {
+                "text": chunks[0],
+                "model_id": ELEVENLABS_MODEL,
+                "voice_settings": voice_settings,
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=180)
+            resp.raise_for_status()
+
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+
+        else:
+            # Multi-chunk path (reuse the excellent FFmpeg concat logic)
+            chunk_files: list[Path] = []
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
+
+                for idx, chunk in enumerate(chunks):
+                    payload = {
+                        "text": chunk,
+                        "model_id": ELEVENLABS_MODEL,
+                        "voice_settings": voice_settings,
+                    }
+                    resp = requests.post(url, headers=headers, json=payload, timeout=180)
+                    resp.raise_for_status()
+
+                    chunk_path = tmpdir_path / f"tts_chunk_{idx:03d}.mp3"
+                    chunk_path.write_bytes(resp.content)
+                    chunk_files.append(chunk_path)
+                    logger.info(f"  Chunk {idx+1}/{len(chunks)} synthesized ({len(chunk)} chars)")
+
+                _concat_mp3_chunks_ffmpeg(chunk_files, output_path)
+                logger.info(f"  Concatenated {len(chunks)} chunks with FFmpeg → final audio")
+
+        file_size = output_path.stat().st_size
+        if file_size < 100:
+            output_path.unlink(missing_ok=True)
+            raise RuntimeError("ElevenLabs TTS mengembalikan audio kosong / terlalu kecil.")
+
+        logger.info(f"ElevenLabs TTS voiceover saved: {output_path} ({file_size} bytes)")
+        return output_path
+
+    except requests.exceptions.HTTPError as e:
+        status = getattr(e.response, "status_code", "?")
+        err_detail = ""
+        try:
+            if e.response is not None:
+                err_detail = e.response.json().get("detail", {}).get("message", str(e))
+                if not err_detail:
+                    err_detail = e.response.text[:500]
+        except Exception:
+            err_detail = str(e)
+
+        # Common ElevenLabs errors
+        if status == 401:
+            hint = "API key tidak valid atau expired."
+        elif status == 422:
+            hint = "Voice ID salah, atau teks mengandung karakter yang bermasalah, atau model tidak support voice tersebut."
+        elif status in (429, 402):
+            hint = "Quota habis / billing limit. Cek di https://elevenlabs.io/app/subscription"
+        else:
+            hint = "Periksa Voice ID, model (eleven_multilingual_v2 direkomendasikan), dan koneksi."
+
+        logger.error(f"ElevenLabs TTS HTTP error ({status}): {err_detail}")
+        raise RuntimeError(
+            f"ElevenLabs TTS gagal (HTTP {status}):\n{err_detail}\n\n"
+            f"{hint}\n\n"
+            "Pastikan:\n"
+            "• ELEVENLABS_API_KEY dan ELEVENLABS_VOICE_ID benar\n"
+            "• Model valid: eleven_multilingual_v2 (paling bagus untuk ID) atau eleven_turbo_v2_5\n"
+            "• Teks per chunk <= ~4500 karakter (kami sudah auto-split)\n"
+            "Lihat https://elevenlabs.io/docs/api-reference/text-to-speech"
+        ) from e
+    except Exception as e:
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+        logger.error(f"ElevenLabs TTS gagal: {e}")
+        raise RuntimeError(
+            f"ElevenLabs TTS synthesis gagal: {e}\n\n"
+            "Cek API key, Voice ID, dan quota di https://elevenlabs.io/app"
+        ) from e
+
+
 def generate_xtts_voiceover(
     script_text: str,
     output_name: Optional[str] = None,
@@ -574,10 +753,11 @@ def generate_voiceover(
     High-level dispatcher berdasarkan TTS_PROVIDER di .env.
 
     Provider yang didukung:
-    - edge-tts (default, online gratis tapi kadang unreliable)
-    - xtts     (local, lebih reliable)
-    - piper    (local, paling cepat & reliable untuk automation)
-    - openai   (cloud API reliable, mudah, biaya kecil; auto-split untuk script panjang)
+    - edge-tts   (default, online gratis tapi kadang unreliable)
+    - xtts       (local, lebih reliable)
+    - piper      (local, paling cepat & reliable untuk automation)
+    - openai     (cloud API reliable, mudah, biaya kecil; auto-split untuk script panjang)
+    - elevenlabs (premium cloud, kualitas sangat natural, auto-split + concat)
     """
     provider = TTS_PROVIDER.lower().strip()
 
@@ -599,6 +779,9 @@ def generate_voiceover(
     elif provider == "openai":
         return generate_openai_voiceover(script_text, output_name)
 
+    elif provider in ("elevenlabs", "eleven", "11labs", "eleven-labs", "elevenlabs-tts"):
+        return generate_elevenlabs_voiceover(script_text, output_name)
+
     else:
         # Default / edge-tts
         if clone_reference and clone_reference.exists():
@@ -617,6 +800,7 @@ def generate_voiceover(
                     f"Voice: {voice or TTS_VOICE}\n\n"
                     "Karena edge-tts kurang reliable (online), pertimbangkan:\n"
                     "• Set TTS_PROVIDER=openai + OPENAI_API_KEY (reliable cloud API, mudah setup, auto-split script panjang)\n"
+                    "• Set TTS_PROVIDER=elevenlabs + ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID (kualitas premium)\n"
                     "• Set TTS_PROVIDER=xtts + TTS_REFERENCE_AUDIO (local, lebih stabil)\n"
                     "• Atau TTS_PROVIDER=piper (paling reliable & offline)\n\n"
                     "Lihat detail di .env.example dan QUICKSTART.md"

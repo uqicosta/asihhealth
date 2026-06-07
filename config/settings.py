@@ -48,10 +48,12 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # === TTS Settings ===
 # Providers:
-# - "edge-tts" : free online, good quality ID voices, but can be unreliable (network/service)
-# - "xtts"     : local (Coqui XTTS), more reliable for automation, needs reference audio for best results
-# - "piper"    : fast local offline (Piper), very reliable, needs voice model download
-# - "openai"   : reliable cloud API (OpenAI TTS), easy setup, small cost, no local models/espeak needed. Good fallback.
+# - "edge-tts"   : free online, good quality ID voices, but can be unreliable (network/service)
+# - "xtts"       : local (Coqui XTTS), more reliable for automation, needs reference audio for best results
+# - "piper"      : fast local offline (Piper), very reliable, needs voice model download
+# - "openai"     : reliable cloud API (OpenAI TTS), easy setup, small cost, no local models/espeak needed. Good fallback.
+# - "elevenlabs" : premium cloud (ElevenLabs), highest natural/emotional quality, great Indonesian support via multilingual_v2.
+#                  Requires ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID. More expensive than OpenAI but often sounds best.
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "edge-tts")
 
 # For edge-tts
@@ -72,6 +74,17 @@ PIPER_CONFIG = os.getenv("PIPER_CONFIG", "")  # usually model.json next to onnx
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "tts-1")  # tts-1 (cheaper) or tts-1-hd (better quality)
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "onyx")  # onyx (deep male, great for narration), nova (female), alloy, echo, shimmer, fable
+
+# === ElevenLabs TTS (premium quality, very natural & emotional voices, excellent multilingual incl. Indonesian) ===
+# Get key + voice ID: https://elevenlabs.io (sign up, go to Voice Lab or Voices tab)
+# Higher quality than OpenAI TTS for many users, but more expensive per character.
+# Supports voice cloning (create custom voice in dashboard → use its voice_id here).
+# Long scripts are auto-split (reuse the same chunking + FFmpeg concat logic as OpenAI).
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")  # REQUIRED for this provider. Example: "21m00Tcm4TlvDq8ikWAM" (Rachel) or your cloned ID
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")  # Recommended: eleven_multilingual_v2 (best quality, supports ID) or eleven_turbo_v2_5 (faster & cheaper)
+ELEVENLABS_STABILITY = float(os.getenv("ELEVENLABS_STABILITY", "0.5"))  # 0.0-1.0 (lower = more expressive/variation, 0.5 is good default)
+ELEVENLABS_SIMILARITY = float(os.getenv("ELEVENLABS_SIMILARITY", "0.75"))  # 0.0-1.0 (how closely to match the target voice)
 
 # === Whisper Settings ===
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
@@ -107,15 +120,34 @@ ASSET_IMAGE_PROVIDER = os.getenv("ASSET_IMAGE_PROVIDER", "pexels")  # pexels | o
 # === Thumbnail ===
 THUMBNAIL_ACCENT_COLOR = tuple(map(int, os.getenv("THUMBNAIL_ACCENT_COLOR", "220,38,38").split(",")))
 
+# === Logo / Watermark Overlay ===
+# Path to your logo image (PNG with transparency recommended)
+LOGO_PATH = os.getenv("LOGO_PATH", "")  # e.g. assets/logo.png
+# Position: bottom_right, bottom_left, top_right, top_left, or custom like "W-w-20:H-h-20"
+LOGO_POSITION = os.getenv("LOGO_POSITION", "bottom_right")
+# Size as fraction of video width (e.g. 0.08 = 8%)
+LOGO_SIZE = float(os.getenv("LOGO_SIZE", "0.08"))
+# Opacity 0.0 (invisible) to 1.0 (solid)
+LOGO_OPACITY = float(os.getenv("LOGO_OPACITY", "0.75"))
+
 # Thumbnail image generation provider
 # "pillow": free local Pillow + stock image or solid bg (default, always works)
 # "openai": use DALL·E via OpenAI to generate a custom AI thumbnail background image
 THUMBNAIL_PROVIDER = os.getenv("THUMBNAIL_PROVIDER", "pillow")  # pillow | openai
 
 # OpenAI model for thumbnail (and asset images) generation (if THUMBNAIL_PROVIDER=openai or ASSET_IMAGE_PROVIDER=openai)
-OPENAI_THUMBNAIL_MODEL = os.getenv("OPENAI_THUMBNAIL_MODEL", "dall-e-3")  # dall-e-3 (recommended) or dall-e-2
-OPENAI_THUMBNAIL_SIZE = os.getenv("OPENAI_THUMBNAIL_SIZE", "1792x1024")  # good 16:9-ish for YouTube (auto-adjusted per model)
-# Note: 'quality'/'response_format' are handled automatically (dall-e-3 uses quality, dall-e-2 uses response_format) to avoid 'Unknown parameter' errors.
+OPENAI_THUMBNAIL_MODEL = os.getenv("OPENAI_THUMBNAIL_MODEL", "dall-e-3")  # dall-e-3, dall-e-2, or gpt-image-1
+OPENAI_THUMBNAIL_SIZE = os.getenv("OPENAI_THUMBNAIL_SIZE", "1792x1024")  # auto-adjusted per model
+# Optional override for quality (if set, used for all models that support it).
+# gpt-image-1 supports: low, medium, high, auto
+# dall-e-3 supports: standard, hd
+OPENAI_IMAGE_QUALITY = os.getenv("OPENAI_IMAGE_QUALITY", "")
+# Note: if OPENAI_IMAGE_QUALITY is empty, code auto-selects based on model.
+
+# Response format for OpenAI image generation.
+# "b64_json" (recommended - gets image data directly, no URL expiration issues)
+# "url" (returns a temporary URL that expires after ~60 minutes)
+OPENAI_IMAGE_RESPONSE_FORMAT = os.getenv("OPENAI_IMAGE_RESPONSE_FORMAT", "b64_json")
 
 # === Health Content Specific Prompts ===
 HEALTH_DISCLAIMER = """
